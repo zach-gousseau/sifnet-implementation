@@ -125,21 +125,39 @@ class DataGen:
         trans_vector = self.scaler.transform(input_vector)
         return trans_vector[0][var_index]
 
+    def split_xy(arr, num_timesteps_predict, num_timesteps_input):
+        # Split x and y temporally
+        Y = arr[:, :, :, :, -(num_timesteps_predict):]
+        X = arr[:, :, :, :, :num_timesteps_input]
+
+        # Get only SIC from the Y data Assumes SIC is the first variable !!
+        # TODO: Extracting SIC as the target variable this late creates a larger array than is necessary. Try to find a 
+        # way to do the splitting into X/Y earlier to avoid this. 
+        Y = np.expand_dims(Y[0], 0)
+
+        # Reshape
+        Y = np.transpose(Y, [1, 4, 2, 3, 0])
+        X = np.transpose(X, [1, 4, 2, 3, 0]) 
+        return X, Y
+
+
     def get_generator(
             self,
             ds,
             month,
             num_timesteps_input=3,
             num_timesteps_predict=30,
-            predict_only_sic=True,
             num_training_years=3,
-            binary=True):
+            binary_SIC=True,
+            valid_only=False):
 
         sic_index = 0
 
         data_vars = list(ds.data_vars)
         logging.info(f'Read dataset with variables: {data_vars}')
         logging.info(f'Assuming variable {sic_index} ({data_vars[sic_index]}) is the SIC variable')
+
+        ds = self.normalize_xarray(ds)
 
         # Create expanded dataset (add timesteps)
         ds_timesteps = ds.rolling(time=num_timesteps_input + num_timesteps_predict).construct('timesteps')
@@ -151,52 +169,69 @@ class DataGen:
         ds_timesteps = ds_timesteps.assign_coords(time=launch_dates)
 
         for ds_train, ds_test, ds_valid in self.data_split(ds_timesteps, num_training_years, month):
-
-            # Convert to numpy
-            train_array, test_array, valid_array = (np.array(ds.to_array()) for ds in [ds_train, ds_test, ds_valid])
-
-            # Split x and y
-            train_Y, test_Y, valid_Y = (arr[:, :, :, :, -(num_timesteps_predict):] for arr in [train_array, test_array, valid_array])
-            train_X, test_X, valid_X = (arr[:, :, :, :, :num_timesteps_input] for arr in [train_array, test_array, valid_array])
+            
+            # Save dates
             dates_train, dates_test, dates_valid = (ds.time for ds in [ds_train, ds_test, ds_valid])
 
-            # Normalize -- TODO: Normalize using the entire dataset ?????
-            train_X, test_X, valid_X = self.normalize(train_X, test_X, valid_X)
+            # Since this function can also be used to only get validation data (for evaluating results), 
+            # we first process the validation data only, then add the train/test if it is desired. Maybe not
+            # the most intuitive way of doing this. 
 
-            # Replace NaNs with 0s 
-            train_X, test_X, valid_X = (np.nan_to_num(arr) for arr in [train_X, test_X, valid_X])
-            train_Y, test_Y, valid_Y = (np.nan_to_num(arr) for arr in [train_Y, test_Y, valid_Y])
+            # Convert to numpy & replace NaNs with 0s
+            valid_array = np.nan_to_num(np.array(ds_valid.to_array()))
 
-            logging.info(
-                f'''Generated dataset:
-                \tTraining: {dates_train[0].values} to {dates_train[-1].values}
-                \tTest: {dates_test[0].values} to {dates_test[-1].values}
-                \tValid: {dates_valid[0].values} to {dates_valid[-1].values}'''
-                )
-
-            # Assumes SIC is the first variable !!
-            if predict_only_sic:
-                train_Y, test_Y, valid_Y = (np.expand_dims(arr[0], 0) for arr in [train_Y, test_Y, valid_Y])
+            valid_X, valid_Y = self.split_xy(valid_array)
 
             # If we want binary ice off / on instead of SIC
-            if binary:
-                train_Y[0], test_Y[0], valid_Y[0] = (arr[0] > BINARY_THRESH for arr in [train_Y, test_Y, valid_Y])
+            if binary_SIC:
+                valid_Y[0] = valid_Y[0] > BINARY_THRESH
 
-            train_Y, test_Y, valid_Y = (np.transpose(arr, [1, 4, 2, 3, 0]) for arr in [train_Y, test_Y, valid_Y])
-            train_X, test_X, valid_X = (np.transpose(arr, [1, 4, 2, 3, 0]) for arr in [train_X, test_X, valid_X])
-
-            # Yield data as a dictionary
+            # Add train and test data to the returned dictionary
             data = dict(
-                dates_train=dates_train,
-                train_X=train_X,
-                train_Y=train_Y,
-                dates_test=dates_test,
-                test_X=test_X,
-                test_Y=test_Y,
                 dates_valid=dates_valid,
                 valid_X=valid_X,
                 valid_Y=valid_Y,
             )
+
+
+            if not valid_only:
+                # Convert to numpy & replace NaNs with 0s
+                train_array = np.nan_to_num(np.array(ds_train.to_array()))
+                test_array = np.nan_to_num(np.array(ds_test.to_array()))
+
+                train_X, train_Y = self.split_xy(train_array)
+                test_X, test_Y = self.split_xy(test_array)
+
+                # If we want binary ice off / on instead of SIC
+                if binary_SIC:
+                    train_Y[0] = train_Y[0] > BINARY_THRESH
+                    test_Y[0] = test_Y[0] > BINARY_THRESH
+
+                # Add train and test data to the returned dictionary
+                data_train_test = dict(
+                    dates_train=dates_train,
+                    train_X=train_X,
+                    train_Y=train_Y,
+                    dates_test=dates_test,
+                    test_X=test_X,
+                    test_Y=test_Y,
+                    dates_valid=dates_valid,
+                )
+
+                data = {**data, **data_train_test}
+
+                logging.info(
+                    f'''Generated dataset:
+                    \tTraining: {dates_train[0].values} to {dates_train[-1].values}
+                    \tTest: {dates_test[0].values} to {dates_test[-1].values}
+                    \tValidation: {dates_valid[0].values} to {dates_valid[-1].values}'''
+                )
+            else:
+                logging.info(
+                    f'''Generated dataset:
+                    \tValidation: {dates_valid[0].values} to {dates_valid[-1].values}'''
+                )
+
             yield data
 
 
