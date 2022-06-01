@@ -19,7 +19,7 @@ NUM_TIMESTEPS_INPUT = 3
 NUM_TIMESTEPS_PREDICT = 60
 BINARY = True
 
-EPOCHS = (250, 40)  # First number referring to initial training, second for subsequent training
+EPOCHS = (200, 40)  # First number referring to initial training, second for subsequent training
 BATCH_SIZE = 16
 TRAINING_YEARS = 10
 
@@ -53,7 +53,7 @@ def train(month, data_path, save_path=''):
         month=month,
         num_timesteps_input=NUM_TIMESTEPS_INPUT,
         num_timesteps_predict=NUM_TIMESTEPS_PREDICT,
-        binary_SIC=BINARY,
+        binary_sic=BINARY,
         num_training_years=TRAINING_YEARS,
         )
 
@@ -133,7 +133,7 @@ if __name__ == '__main__':
     month = int(args.month)
 
     data_path = '/home/zgoussea/scratch/era5_hb_daily.zarr'
-    save_path = '/home/zgoussea/scratch/sifnet_results/9'
+    save_path = '/home/zgoussea/scratch/sifnet_results/10'
 
     if  not os.path.exists(save_path):
         os.makedirs(save_path)
