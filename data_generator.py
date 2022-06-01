@@ -47,6 +47,7 @@ class DataGen:
         ds = ds.assign_coords({'month': ds.time.dt.month})
         return ds
 
+    @staticmethod
     def normalize_xarray(ds):
         return (ds - ds.mean()) / ds.std()
 
@@ -125,7 +126,7 @@ class DataGen:
         trans_vector = self.scaler.transform(input_vector)
         return trans_vector[0][var_index]
 
-    def split_xy(arr, num_timesteps_predict, num_timesteps_input):
+    def split_xy(self, arr, num_timesteps_predict, num_timesteps_input):
         # Split x and y temporally
         Y = arr[:, :, :, :, -(num_timesteps_predict):]
         X = arr[:, :, :, :, :num_timesteps_input]
@@ -157,6 +158,8 @@ class DataGen:
         logging.info(f'Read dataset with variables: {data_vars}')
         logging.info(f'Assuming variable {sic_index} ({data_vars[sic_index]}) is the SIC variable')
 
+        # Normalizing the entire dataset first is cheating a little bit since it gives future information to past observations
+        # but the effect is likely minimal 
         ds = self.normalize_xarray(ds)
 
         # Create expanded dataset (add timesteps)
@@ -180,7 +183,7 @@ class DataGen:
             # Convert to numpy & replace NaNs with 0s
             valid_array = np.nan_to_num(np.array(ds_valid.to_array()))
 
-            valid_X, valid_Y = self.split_xy(valid_array)
+            valid_X, valid_Y = self.split_xy(valid_array, num_timesteps_predict, num_timesteps_input)
 
             # If we want binary ice off / on instead of SIC
             if binary_SIC:
@@ -199,8 +202,8 @@ class DataGen:
                 train_array = np.nan_to_num(np.array(ds_train.to_array()))
                 test_array = np.nan_to_num(np.array(ds_test.to_array()))
 
-                train_X, train_Y = self.split_xy(train_array)
-                test_X, test_Y = self.split_xy(test_array)
+                train_X, train_Y = self.split_xy(train_array, num_timesteps_predict, num_timesteps_input)
+                test_X, test_Y = self.split_xy(test_array, num_timesteps_predict, num_timesteps_input)
 
                 # If we want binary ice off / on instead of SIC
                 if binary_SIC:
@@ -208,17 +211,18 @@ class DataGen:
                     test_Y[0] = test_Y[0] > BINARY_THRESH
 
                 # Add train and test data to the returned dictionary
-                data_train_test = dict(
-                    dates_train=dates_train,
-                    train_X=train_X,
-                    train_Y=train_Y,
-                    dates_test=dates_test,
-                    test_X=test_X,
-                    test_Y=test_Y,
-                    dates_valid=dates_valid,
-                )
-
-                data = {**data, **data_train_test}
+                data = {
+                    **data, 
+                    **dict(
+                        dates_train=dates_train,
+                        train_X=train_X,
+                        train_Y=train_Y,
+                        dates_test=dates_test,
+                        test_X=test_X,
+                        test_Y=test_Y,
+                        dates_valid=dates_valid,
+                        )
+                    }
 
                 logging.info(
                     f'''Generated dataset:
