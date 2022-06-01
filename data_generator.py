@@ -47,6 +47,7 @@ class DataGen:
         ds = ds.assign_coords({'month': ds.time.dt.month})
         return ds
 
+    @staticmethod
     def normalize_xarray(ds):
         return (ds - ds.mean()) / ds.std()
 
@@ -104,19 +105,16 @@ class DataGen:
             ds_valid = ds_month.where(ds_month.nominal_year == valid_year, drop=True)
             ds_valid = ds_valid.where(ds_valid.time.dt.month == month, drop=True)
             yield ds_train, ds_test, ds_valid
+
+    def update_scaler(self, arr):
+        '''
+        Unsure if partial_fit() is most appropriate. Distribution changes (due to changing climate), so maybe best to 
+        re-fit from scratch each time? 
+        '''
+        self.scaler = self.scaler.partial_fit(arr.reshape(-1, np.prod(arr.shape[1:])).T)
             
-    def normalize(self, train_array, test_array, valid_array=None):
-        scaler = StandardScaler()
-        train_array = scaler.fit_transform(train_array.reshape(-1, np.prod(train_array.shape[1:])).T).T.reshape(train_array.shape)
-        test_array = scaler.transform(test_array.reshape(-1, np.prod(test_array.shape[1:])).T).T.reshape(test_array.shape)
-
-        self.scaler = scaler
-
-        if valid_array is not None:
-            valid_array = scaler.transform(valid_array.reshape(-1, np.prod(valid_array.shape[1:])).T).T.reshape(valid_array.shape)
-            return train_array, test_array, valid_array
-        else:
-            return train_array, test_array
+    def normalize(self, arr):
+        return self.scaler.transform(arr.reshape(-1, np.prod(arr.shape[1:])).T).T.reshape(arr.shape)
 
     def get_transformed_value(self, var_index, value):
         """Get the transformed equivalent of a value for the already-fit scaler."""
@@ -125,7 +123,7 @@ class DataGen:
         trans_vector = self.scaler.transform(input_vector)
         return trans_vector[0][var_index]
 
-    def split_xy(arr, num_timesteps_predict, num_timesteps_input):
+    def split_xy(self, arr, num_timesteps_predict, num_timesteps_input):
         # Split x and y temporally
         Y = arr[:, :, :, :, -(num_timesteps_predict):]
         X = arr[:, :, :, :, :num_timesteps_input]
@@ -148,7 +146,7 @@ class DataGen:
             num_timesteps_input=3,
             num_timesteps_predict=30,
             num_training_years=3,
-            binary_SIC=True,
+            binary_sic=True,
             valid_only=False):
 
         sic_index = 0
@@ -156,8 +154,6 @@ class DataGen:
         data_vars = list(ds.data_vars)
         logging.info(f'Read dataset with variables: {data_vars}')
         logging.info(f'Assuming variable {sic_index} ({data_vars[sic_index]}) is the SIC variable')
-
-        ds = self.normalize_xarray(ds)
 
         # Create expanded dataset (add timesteps)
         ds_timesteps = ds.rolling(time=num_timesteps_input + num_timesteps_predict).construct('timesteps')
@@ -173,6 +169,9 @@ class DataGen:
             # Save dates
             dates_train, dates_test, dates_valid = (ds.time for ds in [ds_train, ds_test, ds_valid])
 
+            # Update the normalization scaler with just the first timestep of the train array
+            self.update_scaler(np.array(ds_train.isel(timesteps=0).to_array()))
+
             # Since this function can also be used to only get validation data (for evaluating results), 
             # we first process the validation data only, then add the train/test if it is desired. Maybe not
             # the most intuitive way of doing this. 
@@ -180,10 +179,13 @@ class DataGen:
             # Convert to numpy & replace NaNs with 0s
             valid_array = np.nan_to_num(np.array(ds_valid.to_array()))
 
-            valid_X, valid_Y = self.split_xy(valid_array)
+            valid_X, valid_Y = self.split_xy(valid_array, num_timesteps_predict, num_timesteps_input)
+
+            # Normalize X only
+            valid_X = self.normalize(valid_X)
 
             # If we want binary ice off / on instead of SIC
-            if binary_SIC:
+            if binary_sic:
                 valid_Y[0] = valid_Y[0] > BINARY_THRESH
 
             # Add train and test data to the returned dictionary
@@ -199,26 +201,31 @@ class DataGen:
                 train_array = np.nan_to_num(np.array(ds_train.to_array()))
                 test_array = np.nan_to_num(np.array(ds_test.to_array()))
 
-                train_X, train_Y = self.split_xy(train_array)
-                test_X, test_Y = self.split_xy(test_array)
+                train_X, train_Y = self.split_xy(train_array, num_timesteps_predict, num_timesteps_input)
+                test_X, test_Y = self.split_xy(test_array, num_timesteps_predict, num_timesteps_input)
+
+                # Normalize X only
+                train_X = self.normalize(train_X)
+                test_X = self.normalize(test_X)
 
                 # If we want binary ice off / on instead of SIC
-                if binary_SIC:
+                if binary_sic:
                     train_Y[0] = train_Y[0] > BINARY_THRESH
                     test_Y[0] = test_Y[0] > BINARY_THRESH
 
                 # Add train and test data to the returned dictionary
-                data_train_test = dict(
-                    dates_train=dates_train,
-                    train_X=train_X,
-                    train_Y=train_Y,
-                    dates_test=dates_test,
-                    test_X=test_X,
-                    test_Y=test_Y,
-                    dates_valid=dates_valid,
-                )
-
-                data = {**data, **data_train_test}
+                data = {
+                    **data, 
+                    **dict(
+                        dates_train=dates_train,
+                        train_X=train_X,
+                        train_Y=train_Y,
+                        dates_test=dates_test,
+                        test_X=test_X,
+                        test_Y=test_Y,
+                        dates_valid=dates_valid,
+                        )
+                    }
 
                 logging.info(
                     f'''Generated dataset:

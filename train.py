@@ -19,7 +19,7 @@ NUM_TIMESTEPS_INPUT = 3
 NUM_TIMESTEPS_PREDICT = 60
 BINARY = True
 
-EPOCHS = 250
+EPOCHS = (200, 40)  # First number referring to initial training, second for subsequent training
 BATCH_SIZE = 16
 TRAINING_YEARS = 10
 
@@ -53,7 +53,7 @@ def train(month, data_path, save_path=''):
         month=month,
         num_timesteps_input=NUM_TIMESTEPS_INPUT,
         num_timesteps_predict=NUM_TIMESTEPS_PREDICT,
-        binary=BINARY,
+        binary_sic=BINARY,
         num_training_years=TRAINING_YEARS,
         )
 
@@ -75,7 +75,7 @@ def train(month, data_path, save_path=''):
             data['train_X'],
             data['train_Y'],
             batch_size=BATCH_SIZE,
-            epochs=EPOCHS,
+            epochs=EPOCHS[0] if i == 0 else EPOCHS[1],
             validation_data=(data['test_X'], data['test_Y']),
             callbacks=[early_stopping],
             verbose=0,
@@ -124,6 +124,8 @@ def train(month, data_path, save_path=''):
 
 if __name__ == '__main__':
 
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("month", help="which month's model?")
 
@@ -131,7 +133,7 @@ if __name__ == '__main__':
     month = int(args.month)
 
     data_path = '/home/zgoussea/scratch/era5_hb_daily.zarr'
-    save_path = '/home/zgoussea/scratch/sifnet_results/8'
+    save_path = '/home/zgoussea/scratch/sifnet_results/10'
 
     if  not os.path.exists(save_path):
         os.makedirs(save_path)
