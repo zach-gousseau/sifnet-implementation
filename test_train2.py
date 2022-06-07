@@ -1,14 +1,10 @@
-import argparse
-import datetime
 import logging
-import os
-import sys
 from calendar import monthrange
 
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-import xarray as xr
+import sys
 from tensorflow import keras
 from tqdm import tqdm
 
@@ -19,18 +15,19 @@ from model import (
     spatial_feature_pyramid_net_vectorized_ND,
 )
 
+print("Finished imports")
 NUM_TIMESTEPS_INPUT = 3
-NUM_TIMESTEPS_PREDICT = 60
+NUM_TIMESTEPS_PREDICT = 4
 BINARY = True
 
 # First number referring to initial training, second for subsequent training
 EPOCHS = (
-    200,
-    100,
+    2,
+    1,
 )
 
 BATCH_SIZE = 16
-TRAINING_YEARS = 10
+TRAINING_YEARS = 2
 
 
 def train(month, data_path, save_path=""):
@@ -60,9 +57,6 @@ def train(month, data_path, save_path=""):
     image_size = len(ds.latitude), len(ds.longitude)
     num_vars = len(ds.data_vars)
 
-    preds = None
-    loss_curves = None
-
     # Create dataset iterator
     datasets = data_gen.get_generator(
         ds,
@@ -72,6 +66,8 @@ def train(month, data_path, save_path=""):
         binary_sic=BINARY,
         num_training_years=TRAINING_YEARS,
     )
+
+    print("Got generator")
 
     # Create model & compile
     early_stopping = keras.callbacks.EarlyStopping(monitor="val_loss", patience=5)
@@ -96,84 +92,17 @@ def train(month, data_path, save_path=""):
             epochs=EPOCHS[0] if i == 0 else EPOCHS[1],
             validation_data=(data["test_X"], data["test_Y"]),
             callbacks=[early_stopping],
-            verbose=0,
+            verbose=1,
         )
-
-        # Get loss curve
-        loss_curve = pd.DataFrame(
-            {
-                "iteration": [i] * len(history.history["val_loss"]),
-                "val_loss": history.history["val_loss"],
-                "loss": history.history["loss"],
-            }
-        )
-
-        # Get predictions on validation set
-        preds_month = model.predict(data["valid_X"])
-        preds_month = xr.DataArray(
-            preds_month[..., 0],
-            dims=("time", "timestep", "latitude", "longitude"),
-            coords=dict(
-                time=data["dates_valid"],
-                latitude=ds.latitude,
-                longitude=ds.longitude,
-            ),
-        )
-
-        # Append loss / preds
-        preds = (
-            xr.concat([preds, preds_month], dim="time")
-            if preds is not None
-            else preds_month
-        )
-        loss_curves = (
-            loss_curves.append(loss_curve) if loss_curves is not None else loss_curve
-        )
-
-        # Save this version of the model
-        model.save(os.path.join(save_path, f"model_{month}_{i}"))
-
-        i += 1
-
-    # Turn to xr.Dataset
-    preds = preds.to_dataset(name="pred")
-    preds = preds.assign_coords(
-        doy=(
-            ("time"),
-            [
-                f"{m}-{d}"
-                for m, d in zip(preds.time.dt.month.values, preds.time.dt.day.values)
-            ],
-        )
-    )
-
-    # Save results
-    preds.to_netcdf(os.path.join(save_path, f"preds_{month}.nc"), mode="w")
-    model.save(os.path.join(save_path, f"model_{month}"))
-    loss_curves.to_csv(os.path.join(save_path, f"loss_{month}.csv"), index=False)
-
-    logging.info(f"Results written to {save_path}")
+        if i == 3:
+            break
 
 
 if __name__ == "__main__":
-
     logging.basicConfig(stream=sys.stdout, level=logging.INFO)
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("month", help="which month's model?")
-
-    args = parser.parse_args()
-    month = int(args.month)
-
+    month = 1
     data_path = "/home/zgoussea/scratch/era5_hb_daily.zarr"
-    save_path = "/home/zgoussea/scratch/sifnet_results/11"
-
-    if not os.path.exists(save_path):
-        os.makedirs(save_path)
 
     tf.random.set_seed(42)
-
-    # Use multiple GPUs
-    mirrored_strategy = tf.distribute.MultiWorkerMirroredStrategy()
-    with mirrored_strategy.scope():
-        train(month, data_path=data_path, save_path=save_path)
+    print("start training")
+    train(month, data_path=data_path, save_path="")
