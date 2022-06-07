@@ -1,20 +1,22 @@
-import os
-import xarray as xr
-import numpy as np
-import datetime
-import tensorflow as tf
-from tensorflow import keras
 import argparse
-import pandas as pd
-import sys
-from tqdm import tqdm
-from calendar import monthrange
+import datetime
 import logging
-import matplotlib.pyplot as plt
+import os
+import sys
+from calendar import monthrange
 
-from model import spatial_feature_pyramid_net_hiddenstate_ND, spatial_feature_pyramid_net_vectorized_ND
-from losses import masked_MSE, masked_binary_crossentropy, masked_accuracy
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+import xarray as xr
+from tensorflow import keras
+from tqdm import tqdm
+
 from data_generator import DataGen
+from losses import masked_accuracy, masked_binary_crossentropy, masked_MSE
+from model import (spatial_feature_pyramid_net_hiddenstate_ND,
+                   spatial_feature_pyramid_net_vectorized_ND)
 
 NUM_TIMESTEPS_INPUT = 3
 NUM_TIMESTEPS_PREDICT = 1
@@ -23,6 +25,7 @@ BINARY = True
 EPOCHS = 120
 BATCH_SIZE = 8
 TRAINING_YEARS = 1
+
 
 class PredictionCallback(tf.keras.callbacks.Callback):
     def __init__(self, model, data, landmask):
@@ -36,8 +39,6 @@ class PredictionCallback(tf.keras.callbacks.Callback):
         fig, axs = plt.subplots(1, 2, figsize=(8, 4))
         im1 = axs[0].imshow(np.ma.masked_where(self.landmask, preds[26, 0, :, :, 0]), vmin=0, vmax=1)
         im2 = axs[1].imshow(np.ma.masked_where(self.landmask, true[26, 0, :, :, 0]), vmin=0, vmax=1)
-        # plt.colorbar(im1)
-        # plt.colorbar(im2)
         plt.savefig(f'figs/predictions_by_epoch/{epoch}.png')
         plt.close()
 

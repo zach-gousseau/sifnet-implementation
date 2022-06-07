@@ -1,6 +1,7 @@
 # User
 .vscode/
 figs/
+glorys12/pydap-3.3.0.tar.gz
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
