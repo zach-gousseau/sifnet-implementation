@@ -13,8 +13,8 @@ class DataGen:
         self.scaler = StandardScaler()
 
     @staticmethod
-    def get_landmask(ds):
-        return np.logical_not(np.isnan(ds.sic.isel(time=0)))
+    def get_landmask_from_nans(ds, var_='siconc'):
+        return np.logical_not(np.isnan(ds[var_].isel(time=0)))
 
     @staticmethod
     def create_timesteps(arr, num_timesteps=3):
@@ -38,14 +38,16 @@ class DataGen:
         ds = ds.drop_vars("climate_year")
         return ds
 
-    def get_data(self, path="/home/zgoussea/scratch/era5_hb_daily.zarr"):
-        ds = xr.open_zarr(path)
-        ds = xr.merge([ds[["siconc"]], ds.drop("siconc")])
-        ds = ds.rename({"siconc": "sic"})
+    def get_data(self, path="/home/zgoussea/scratch/era5_hb_daily.zarr", ds=None):
+        if ds is None:
+            ds = xr.open_zarr(path)
+        # ds = xr.merge([ds[["siconc"]], ds.drop("siconc")])
+        # ds = ds.rename({"siconc": "sic"})
 
         # Only these variables
-        vars = ["sic", "sst", "t2m", "sshf", "u10", "v10"]
-        ds = ds[vars]
+        # if input_vars is  None:
+        #     input_vars = ds.data_vars
+        #     ds = ds[vars_]
 
         # Calculate ADD
         ds = self.get_add(ds)
@@ -132,8 +134,8 @@ class DataGen:
         self.scaler = self.scaler.partial_fit(arr.reshape(-1, np.prod(arr.shape[1:])).T)
 
     def normalize(self, arr):
-        print(arr.shape)
-        print(arr.reshape(-1, np.prod(arr.shape[-1])).T.shape)
+        # print(arr.shape)
+        # print(arr.reshape(-1, np.prod(arr.shape[-1])).T.shape)
         return self.scaler.transform(arr.reshape(-1, arr.shape[-1])).reshape(arr.shape)
 
     def get_transformed_value(self, var_index, value):
@@ -143,15 +145,15 @@ class DataGen:
         trans_vector = self.scaler.transform(input_vector)
         return trans_vector[0][var_index]
 
-    def split_xy(self, arr, num_timesteps_predict, num_timesteps_input):
+    def split_xy(self, arr, num_timesteps_predict, num_timesteps_input, split_index):
         # Split x and y temporally
         Y = arr[:, :, :, :, -(num_timesteps_predict):]
         X = arr[:, :, :, :, :num_timesteps_input]
 
-        # Get only SIC from the Y data Assumes SIC is the first variable !!
+        # Extract Y variables at the specified index
         # TODO: Extracting SIC as the target variable this late creates a larger array than is necessary. Try to find a
         # way to do the splitting into X/Y earlier to avoid this.
-        Y = np.expand_dims(Y[0], 0)
+        Y = Y[:split_index]
 
         # Reshape
         Y = np.transpose(Y, [1, 4, 2, 3, 0])
@@ -167,15 +169,33 @@ class DataGen:
         num_training_years=3,
         binary_sic=True,
         valid_only=False,
+        input_vars=None,
+        output_vars=['siconc']
     ):
 
-        sic_index = 0
+        # If no input variables specified, use all except the output variables
+        if input_vars is None:
+            logging.info('No input variables specified, using all available')
+            input_vars = ds.data_vars
+            for var_ in output_vars:
+                input_vars.remove(var_)
 
-        data_vars = list(ds.data_vars)
-        logging.info(f"Read dataset with variables: {data_vars}")
+        assert np.all([var_ in ds.data_vars for var_ in input_vars])
+        assert np.all([var_ in ds.data_vars for var_ in output_vars])
+        assert len(input_vars) > 0
+        assert len(output_vars) > 0
+
         logging.info(
-            f"Assuming variable {sic_index} ({data_vars[sic_index]}) is the SIC variable"
+            f"Predicter variable(s): ({len(input_vars)}) {output_vars}"
         )
+        logging.info(
+            f"Predictand variable(s): ({len(output_vars)}) {output_vars}"
+        )
+
+        # Re-order dataset so predictand variables are first 
+        # This allows subsequent functions to assume the first N variables are the 
+        # predictands (once it is transformed to unnamed numpy arrays)
+        ds = ds[output_vars + input_vars]
 
         # Create expanded dataset (add timesteps)
         ds_timesteps = ds.rolling(
@@ -233,10 +253,10 @@ class DataGen:
                 test_array = np.nan_to_num(np.array(ds_test.to_array()))
 
                 train_X, train_Y = self.split_xy(
-                    train_array, num_timesteps_predict, num_timesteps_input
+                    train_array, num_timesteps_predict, num_timesteps_input, split_index=len(output_vars)
                 )
                 test_X, test_Y = self.split_xy(
-                    test_array, num_timesteps_predict, num_timesteps_input
+                    test_array, num_timesteps_predict, num_timesteps_input, split_index=len(output_vars)
                 )
 
                 # Normalize X only
