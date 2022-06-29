@@ -17,7 +17,7 @@ from sklearn.metrics import accuracy_score
 
 from data_generator import DataGen
 
-results_dir = "/home/zgoussea/scratch/sifnet_results/10"
+results_dir = "/home/zgoussea/scratch/sifnet_results/11"
 
 
 def masked_MSE(mask):
