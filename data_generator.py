@@ -11,6 +11,8 @@ BINARY_THRESH = 0.15
 class DataGen:
     def __init__(self):
         self.scaler = StandardScaler()
+        self.X_vars = None
+        self.Y_vars = None
 
     @staticmethod
     def get_landmask_from_nans(ds, var_='siconc'):
@@ -38,19 +40,62 @@ class DataGen:
         ds = ds.drop_vars("climate_year")
         return ds
 
-    def get_data(self, path="/home/zgoussea/scratch/era5_hb_daily.zarr", ds=None):
+    def get_data(
+        self,
+        path="/home/zgoussea/scratch/era5_hb_daily.zarr",
+        ds=None,
+        add_add=True,
+        X_vars=None,
+        Y_vars=['siconc']
+        ):
+
         if ds is None:
             ds = xr.open_zarr(path)
         # ds = xr.merge([ds[["siconc"]], ds.drop("siconc")])
         # ds = ds.rename({"siconc": "sic"})
 
         # Only these variables
-        # if input_vars is  None:
-        #     input_vars = ds.data_vars
+        # if vars is  None:
+        #     vars = ds.data_vars
         #     ds = ds[vars_]
 
         # Calculate ADD
-        ds = self.get_add(ds)
+        if add_add:
+            ds = self.get_add(ds)
+
+        self.Y_vars = Y_vars
+
+        # If no input variables specified, use all except the output variables
+        if X_vars is None:
+            logging.info('No input variables specified, using all available')
+            
+            # Re-order dataset so predictand variables are first 
+            # This allows subsequent functions to assume the first N variables are the 
+            # predictands (once it is transformed to unnamed numpy arrays)
+            self.X_vars = list(ds.data_vars)
+            for var_ in Y_vars:
+                self.X_vars.remove(var_)
+            self.X_vars = self.Y_vars + self.X_vars
+        else:
+            self.X_vars = X_vars
+
+        if add_add:
+            self.X_vars.append('add')
+
+        assert np.all([var_ in ds.data_vars for var_ in self.X_vars])
+        assert np.all([var_ in ds.data_vars for var_ in self.Y_vars])
+        assert len(self.X_vars) > 0
+        assert len(self.Y_vars) > 0
+        assert np.all([var_ in self.X_vars for var_ in self.Y_vars])  # Ensure predicted variable is in the full set of variables
+
+        logging.info(
+            f"Predictor variable(s): ({len(self.X_vars)}) {self.X_vars}"
+        )
+        logging.info(
+            f"Predictand variable(s): ({len(self.Y_vars)}) {self.Y_vars}"
+        )
+
+        ds = ds[self.X_vars]
 
         ds = ds.assign_coords({"month": ds.time.dt.month})
         return ds
@@ -169,33 +214,7 @@ class DataGen:
         num_training_years=3,
         binary_sic=True,
         valid_only=False,
-        input_vars=None,
-        output_vars=['siconc']
     ):
-
-        # If no input variables specified, use all except the output variables
-        if input_vars is None:
-            logging.info('No input variables specified, using all available')
-            input_vars = ds.data_vars
-            for var_ in output_vars:
-                input_vars.remove(var_)
-
-        assert np.all([var_ in ds.data_vars for var_ in input_vars])
-        assert np.all([var_ in ds.data_vars for var_ in output_vars])
-        assert len(input_vars) > 0
-        assert len(output_vars) > 0
-
-        logging.info(
-            f"Predicter variable(s): ({len(input_vars)}) {output_vars}"
-        )
-        logging.info(
-            f"Predictand variable(s): ({len(output_vars)}) {output_vars}"
-        )
-
-        # Re-order dataset so predictand variables are first 
-        # This allows subsequent functions to assume the first N variables are the 
-        # predictands (once it is transformed to unnamed numpy arrays)
-        ds = ds[output_vars + input_vars]
 
         # Create expanded dataset (add timesteps)
         ds_timesteps = ds.rolling(
@@ -230,7 +249,7 @@ class DataGen:
             valid_array = np.nan_to_num(np.array(ds_valid.to_array()))
 
             valid_X, valid_Y = self.split_xy(
-                valid_array, num_timesteps_predict, num_timesteps_input
+                valid_array, num_timesteps_predict, num_timesteps_input, split_index=len(self.Y_vars)
             )
 
             # Normalize X only
@@ -253,10 +272,10 @@ class DataGen:
                 test_array = np.nan_to_num(np.array(ds_test.to_array()))
 
                 train_X, train_Y = self.split_xy(
-                    train_array, num_timesteps_predict, num_timesteps_input, split_index=len(output_vars)
+                    train_array, num_timesteps_predict, num_timesteps_input, split_index=len(self.Y_vars)
                 )
                 test_X, test_Y = self.split_xy(
-                    test_array, num_timesteps_predict, num_timesteps_input, split_index=len(output_vars)
+                    test_array, num_timesteps_predict, num_timesteps_input, split_index=len(self.Y_vars)
                 )
 
                 # Normalize X only

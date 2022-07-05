@@ -50,7 +50,8 @@ if __name__ == '__main__':
     i_1 = i_0 + stepsize
 
     outpath = f'/home/zgoussea/scratch/glorys12/glorys12_{i_0}.nc'
-    ds.isel(time=slice(i_0, i_1)).to_netcdf(outpath)
+    if not os.path.exists(outpath):
+        ds.isel(time=slice(i_0, i_1)).to_netcdf(outpath)
     i_0 += stepsize
 
     print('did first')
@@ -63,7 +64,9 @@ if __name__ == '__main__':
         if os.path.exists(outpath):
             i_0 = i_1
             continue
-        
-        ds.isel(time=slice(i_0, i_1)).to_netcdf(outpath)
-        i_0 = i_1
+        try:
+            ds.isel(time=slice(i_0, i_1)).to_netcdf(outpath)
+            i_0 = i_1
+        except:
+            print(f'failed at {i_0}')
 
