@@ -47,7 +47,7 @@ BINARY = True
 # First number referring to initial training, second for subsequent training
 EPOCHS = (
     200,
-    5, #100,
+    100,
 )
 
 BATCH_SIZE = 16
@@ -93,13 +93,6 @@ def train(month, ds, save_path="", X_vars=None, predict_flux=True):
 
     # Loss function
     if BINARY:
-        # mask = tf.expand_dims(
-        #     np.transpose(
-        #         np.repeat(np.array(landmask)[..., None], NUM_TIMESTEPS_PREDICT, axis=2),
-        #         (2, 0, 1),
-        #     ),
-        #     axis=0,
-        # )
         mask = np.broadcast_to(landmask, (num_vars_to_predict, NUM_TIMESTEPS_PREDICT, landmask.shape[0], landmask.shape[1]))
         mask = np.moveaxis(mask, 0, -1)
 
@@ -138,26 +131,12 @@ def train(month, ds, save_path="", X_vars=None, predict_flux=True):
         num_output_vars=num_vars_to_predict,
     )
 
-    # model.compile(
-    #     loss=loss, optimizer=keras.optimizers.SGD(learning_rate=0.01, momentum=0.9)
-    # )
-
     optimizer = keras.optimizers.SGD(learning_rate=0.01, momentum=0.9)
 
     # Begin loop over datasets
     logging.info("Begin training procedure.")
     i = 0
     for data in tqdm(datasets):
-
-        # history = model.fit(
-        #     data["train_X"],
-        #     data["train_Y"],
-        #     batch_size=BATCH_SIZE,
-        #     epochs=EPOCHS[0] if i == 0 else EPOCHS[1],
-        #     validation_data=(data["test_X"], data["test_Y"]),
-        #     callbacks=[early_stopping],
-        #     verbose=0,
-        # )
 
         num_epochs = EPOCHS[0] if i == 0 else EPOCHS[1]
 
@@ -198,10 +177,6 @@ def train(month, ds, save_path="", X_vars=None, predict_flux=True):
 
                     # Apply gradients
                     optimizer.apply_gradients(zip(grads, model.trainable_variables))
-
-                    # Update average loss for this epoch
-                    # epoch_loss_train.update_state(loss_value_train)
-                    # epoch_loss_test.update_state(loss_value_test)
 
                     if predict_flux:
                         y_pred_train = model(train_X_batch, training=True)
@@ -264,18 +239,6 @@ def train(month, ds, save_path="", X_vars=None, predict_flux=True):
         model.save(os.path.join(save_path, f"model_{month}_{i}"))
 
         i += 1
-
-    # Turn to xr.Dataset
-    # preds = preds.to_dataset(name="pred")
-    # preds = preds.assign_coords(
-    #     doy=(
-    #         ("time"),
-    #         [
-    #             f"{m}-{d}"
-    #             for m, d in zip(preds.time.dt.month.values, preds.time.dt.day.values)
-    #         ],
-    #     )
-    # )
 
     # Save results
     preds.to_netcdf(os.path.join(save_path, f"preds_{month}.nc"), mode="w")
