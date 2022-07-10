@@ -51,17 +51,14 @@ class DataGen:
 
         if ds is None:
             ds = xr.open_zarr(path)
-        # ds = xr.merge([ds[["siconc"]], ds.drop("siconc")])
-        # ds = ds.rename({"siconc": "sic"})
-
-        # Only these variables
-        # if vars is  None:
-        #     vars = ds.data_vars
-        #     ds = ds[vars_]
+        
+        logging.debug('Read Zarr store.')
 
         # Calculate ADD
         if add_add:
             ds = self.get_add(ds)
+
+        logging.debug('Calculated accumulated degree-days (ADD)')
 
         self.Y_vars = Y_vars
 
@@ -88,12 +85,8 @@ class DataGen:
         assert len(self.Y_vars) > 0
         assert np.all([var_ in self.X_vars for var_ in self.Y_vars])  # Ensure predicted variable is in the full set of variables
 
-        logging.info(
-            f"Predictor variable(s): ({len(self.X_vars)}) {self.X_vars}"
-        )
-        logging.info(
-            f"Predictand variable(s): ({len(self.Y_vars)}) {self.Y_vars}"
-        )
+        logging.info(f"Predictor variable(s): ({len(self.X_vars)}) {self.X_vars}")
+        logging.info(f"Predictand variable(s): ({len(self.Y_vars)}) {self.Y_vars}")
 
         ds = ds[self.X_vars]
 
@@ -220,6 +213,8 @@ class DataGen:
         ds_timesteps = ds.rolling(
             time=num_timesteps_input + num_timesteps_predict
         ).construct("timesteps")
+
+        logging.debug('Constructed ')
 
         # Remove first num_timesteps_input timesteps and assign the launch date
         # dates to be the de-facto dates for each timestep.

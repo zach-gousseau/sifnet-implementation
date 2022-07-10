@@ -1,3 +1,4 @@
+from pickle import FALSE
 import packaging
 import xarray as xr
 import os
@@ -18,6 +19,7 @@ import logging
 import os
 import sys
 from calendar import monthrange
+import time
 
 import numpy as np
 import pandas as pd
@@ -34,223 +36,320 @@ from model import (
     spatial_feature_pyramid_net_vectorized_ND,
 )
 
-# GLORYS12 Copernicus Login Information 
-USERNAME = 'zgousseau'
-PASSWORD = os.environ.get('CMEMS_PASS')
-DATASET_ID = 'cmems_mod_glo_phy_my_0.083_P1D-m'
-
-# Model Parameters
-NUM_TIMESTEPS_INPUT = 2
-NUM_TIMESTEPS_PREDICT = 3
-BINARY = True
-
 # First number referring to initial training, second for subsequent training
 EPOCHS = (
-    200,
-    100,
+    60,
+    40,
 )
 
-BATCH_SIZE = 16
-TRAINING_YEARS = 1
-
-def batch_generator(arr, batch_size):
+def batch_generator(arr, batch_size, overlap=0):
     i0 = 0
 
-    while i0 < len(arr):
-        i1 = min(i0 + batch_size, len(arr))
+    while i0 + overlap != len(arr):
+        i1 = min(i0 + batch_size + overlap, len(arr))
         yield arr[i0: i1]
 
-        i0 = i1
-
-def grad(model, inputs, targets, loss_function):
-    with tf.GradientTape() as tape:
-        loss_value = get_loss_value(model, inputs, targets, loss_function)
-    return loss_value, tape.gradient(loss_value, model.trainable_variables)
-
-def get_loss_value(model, inputs, targets, loss_function):
-    y_pred = model(inputs, training=True)
-    loss_value = loss_function(targets, y_pred)
-    return loss_value
+        i0 = i1 - overlap
 
 
-def train(month, ds, save_path="", X_vars=None, predict_flux=True):
 
-    data_gen = DataGen()
+class Model:
 
-    Y_vars = ['adv', 'div', 'res', 'siconc'] if predict_flux else ['siconc'] 
-    
-    ds = data_gen.get_data(
-        ds=ds,
-        add_add=True,
-        X_vars=X_vars,
-        Y_vars=Y_vars
-        )
+    def __init__(self, month, predict_flux=True, num_timesteps_predict=90, num_timesteps_input=3, num_training_years=10, save_path='', suffix=None):
+        
+        self.predict_flux = predict_flux
+        self.num_vars_to_predict = 3 if self.predict_flux else 1 
+        self.num_timesteps_predict = num_timesteps_predict
+        self.num_timesteps_input = num_timesteps_input
+        self.num_training_years = num_training_years
+        self.save_path = save_path
+        self.suffix = suffix
+        self.month = month
 
-    # Get landmask from SIC
-    landmask = data_gen.get_landmask_from_nans(ds, var_='siconc')
+    def grad(self, model, inputs, targets, loss_function):
+        with tf.GradientTape() as tape:
+            loss_value = self.get_loss_value(model, inputs, targets, loss_function)
+        return loss_value, tape.gradient(loss_value, model.trainable_variables)
 
-    num_vars_to_predict = 3 if predict_flux else 1 
+    def get_loss_value(self, model, inputs, targets, loss_function):
+        y_pred = model(inputs, training=True)
+        loss_value = loss_function(targets, y_pred)
+        return loss_value
 
-    # Loss function
-    if BINARY:
-        mask = np.broadcast_to(landmask, (num_vars_to_predict, NUM_TIMESTEPS_PREDICT, landmask.shape[0], landmask.shape[1]))
-        mask = np.moveaxis(mask, 0, -1)
+    def create_loss_function(self, binary=True, mask=None):
+        if binary:
+            mask = np.broadcast_to(mask, (self.num_vars_to_predict, self.num_timesteps_predict, mask.shape[0], mask.shape[1]))
+            mask = np.moveaxis(mask, 0, -1)
 
-        loss_4d = masked_binary_crossentropy(mask=mask)
-        loss_3d = masked_binary_crossentropy(mask=mask[..., 0])
-    else:
-        mask = np.expand_dims(landmask, [0, -1])
-        loss = masked_MSE(mask=mask)
+            loss_4d = masked_binary_crossentropy(mask=mask)
+            loss_3d = masked_binary_crossentropy(mask=mask[..., 0])
+        else:
+            # mask = np.expand_dims(mask, [0, -1])
+            # loss = masked_MSE(mask=mask)
+            raise NotImplementedError('Need to implement continuous SIC training')
 
-    preds = None
-    loss_curves = None
-
-    # Create dataset iterator
-    datasets = data_gen.get_generator(
-        ds,
-        month=month,
-        num_timesteps_input=NUM_TIMESTEPS_INPUT,
-        num_timesteps_predict=NUM_TIMESTEPS_PREDICT,
-        binary_sic=BINARY,
-        num_training_years=TRAINING_YEARS,
-    )
-
-    # Get data dims
-    image_size = len(ds.latitude), len(ds.longitude)
-    num_vars = len(data_gen.X_vars)
-
-    logging.info(f'Spatial dimensions: {image_size}')
-    logging.info(f'Number of input variables: {num_vars}')
-
-    # Create model & compile
-    early_stopping = keras.callbacks.EarlyStopping(monitor="val_loss", patience=5)
-    model = spatial_feature_pyramid_net_hiddenstate_ND(
-        input_shape=(NUM_TIMESTEPS_INPUT, *image_size, num_vars),
-        output_steps=NUM_TIMESTEPS_PREDICT,
-        l2=0,
-        num_output_vars=num_vars_to_predict,
-    )
-
-    optimizer = keras.optimizers.SGD(learning_rate=0.01, momentum=0.9)
-
-    # Begin loop over datasets
-    logging.info("Begin training procedure.")
-    i = 0
-    for data in tqdm(datasets):
-
-        num_epochs = EPOCHS[0] if i == 0 else EPOCHS[1]
-
-        siconc_loss_train = []
-        siconc_loss_test = []
-
-        for epoch in range(num_epochs):
-            siconc_loss_train_epoch = tf.keras.metrics.Mean()
-            siconc_loss_test_epoch = tf.keras.metrics.Mean()
-
-            train_X_batches = batch_generator(data['train_X'], BATCH_SIZE)
-            train_Y_batches = batch_generator(data['train_Y'], BATCH_SIZE)
-            test_X_batches = batch_generator(data['test_X'], BATCH_SIZE)
-            test_Y_batches = batch_generator(data['test_Y'], BATCH_SIZE)
-
-            # Begin iteration over batches
-            batch_i = 0
-            try:
-                while True:
-
-                    train_X_batch = next(train_X_batches)
-                    train_Y_batch = next(train_Y_batches)
-                    test_X_batch = next(test_X_batches)
-                    test_Y_batch = next(test_Y_batches)
-
-                    # Remove siconc from Ys if predicting on fluxes, while saving siconc for loss calculation
-                    # We want to keep siconc in the loop, but not use it for training, so that we can get predictions
-                    # for siconc later. 
-                    train_siconc = train_Y_batch[..., -1]
-                    test_siconc = test_Y_batch[..., -1]
-                    if predict_flux:
-                        train_Y_batch = train_Y_batch[..., :-1]
-                        test_Y_batch = test_Y_batch[..., :-1]
-
-                    # Get losses and gradients from training
-                    loss_value_train, grads = grad(model, train_X_batch, train_Y_batch, loss_4d)
-                    loss_value_test = get_loss_value(model, test_X_batch, test_Y_batch, loss_4d)
-
-                    # Apply gradients
-                    optimizer.apply_gradients(zip(grads, model.trainable_variables))
-
-                    if predict_flux:
-                        y_pred_train = model(train_X_batch, training=True)
-                        y_pred_test = model(test_X_batch, training=True)
-                        inn_train = np.sum(y_pred_train, axis=-1)
-                        inn_test = np.sum(y_pred_test, axis=-1)
-                        train_siconc_pred = revert_intensification(inn=inn_train, initial_vol=train_siconc[:2])
-                        test_siconc_pred = revert_intensification(inn=inn_test, initial_vol=test_siconc[:2])
-
-                        siconc_loss_train_epoch.update_state(loss_3d(train_siconc, train_siconc_pred))
-                        siconc_loss_test_epoch.update_state(loss_3d(test_siconc, test_siconc_pred))
-                    else:
-                        siconc_loss_train_epoch.update_state(loss_value_train)
-                        siconc_loss_test_epoch.update_state(loss_value_test)
+        return loss_3d, loss_4d
 
 
-                    print(f'Batch {batch_i}', end='\r')
-                    batch_i += 1
+    def train(self, ds, X_vars=None, batch_size=16, save_example_maps=False, early_stop_patience=5):
 
-            except StopIteration:
-                print(f'Epoch: {epoch} -- train_loss: {siconc_loss_train_epoch.result().numpy()} -- test_loss: {siconc_loss_test_epoch.result().numpy()}')
+        data_gen = DataGen()
 
-                siconc_loss_train.append(siconc_loss_train_epoch)
-                siconc_loss_test.append(siconc_loss_test_epoch)
-
-        # Get loss curve
-        loss_curve = pd.DataFrame(
-            {
-                "iteration": [i] * num_epochs,
-                "test_loss": siconc_loss_test,
-                "train_loss": siconc_loss_train,
-            }
-        )
-
-        # Get predictions on validation set
-        preds_month_array = model.predict(data["valid_X"])
-        preds_month = {}
-        for var_i in range(preds_month_array.shape[-1]):
-
-            var_i_name = Y_vars[var_i]
-
-            preds_month[var_i_name] = xr.DataArray(
-                preds_month_array[..., var_i],  # preds_month[..., 0],
-                dims=("time", "timestep", "latitude", "longitude"),
-                coords=dict(
-                    time=data["dates_valid"],
-                    timestep=range(NUM_TIMESTEPS_PREDICT), 
-                    latitude=ds.latitude,
-                    longitude=ds.longitude,
-                ),
+        Y_vars = ['adv', 'div', 'res', 'sivol'] if self.predict_flux else ['sivol'] 
+        
+        ds = data_gen.get_data(
+            ds=ds,
+            add_add=True,
+            X_vars=X_vars,
+            Y_vars=Y_vars
             )
 
-        preds_month = xr.Dataset(preds_month)
+        # Get landmask from SIC
+        landmask = data_gen.get_landmask_from_nans(ds, var_='sivol')
 
-        # Append loss / preds
-        preds = xr.concat([preds, preds_month], dim="time") if preds is not None else preds_month
-        loss_curves = loss_curves.append(loss_curve) if loss_curves is not None else loss_curve
+        # Loss function
+        loss_3d, loss_4d = self.create_loss_function(binary=True, mask=landmask)
 
-        # Save this version of the model
-        model.save(os.path.join(save_path, f"model_{month}_{i}"))
+        preds = None
+        loss_curves = None
 
-        i += 1
+        # Create dataset iterator
+        datasets = data_gen.get_generator(
+            ds,
+            month=self.month,
+            num_timesteps_input=self.num_timesteps_input,
+            num_timesteps_predict=self.num_timesteps_predict,
+            binary_sic=True,
+            num_training_years=self.num_training_years,
+        )
 
-    # Save results
-    preds.to_netcdf(os.path.join(save_path, f"preds_{month}.nc"), mode="w")
-    model.save(os.path.join(save_path, f"model_{month}"))
-    loss_curves.to_csv(os.path.join(save_path, f"loss_{month}.csv"), index=False)
+        # Get data dims
+        image_size = len(ds.latitude), len(ds.longitude)
+        num_vars = len(data_gen.X_vars)
 
-    logging.info(f"Results written to {save_path}")
+        logging.info(f'Spatial dimensions: {image_size}')
+        logging.info(f'Number of input variables: {num_vars}')
+
+        # Create model & compile
+        model = spatial_feature_pyramid_net_hiddenstate_ND(
+            input_shape=(self.num_timesteps_input, *image_size, num_vars),
+            output_steps=self.num_timesteps_predict,
+            l2=0,
+            num_output_vars=self.num_vars_to_predict,
+        )
+
+        optimizer = keras.optimizers.SGD(learning_rate=0.01, momentum=0.9)
+
+        # Begin loop over datasets
+        logging.info("Begin training procedure.")
+        i = 0
+        for data in datasets:
+            iter_start = time.time()
+
+            num_epochs = EPOCHS[0] if i == 0 else EPOCHS[1]
+
+            sivol_loss_train = []
+            sivol_loss_test = []
+
+            curr_best = np.inf
+            epochs_since_improvement = 0
+
+            for epoch in range(num_epochs):
+                sivol_loss_train_epoch = tf.keras.metrics.Mean()
+                sivol_loss_test_epoch = tf.keras.metrics.Mean()
+
+                batch_overlap = 2 if self.predict_flux else 0
+
+                # Begin iteration over training batches
+                train_X_batches = batch_generator(data['train_X'], batch_size, batch_overlap)
+                train_Y_batches = batch_generator(data['train_Y'], batch_size, batch_overlap)
+
+                logging.debug('Created training batch generators')
+
+                batch_i = 0
+                try:
+                    while True:
+
+                        train_X_batch = next(train_X_batches)
+                        train_Y_batch = next(train_Y_batches)
+
+
+                        # Remove sivol from Ys if predicting on fluxes, while saving sivol for loss calculation
+                        # We want to keep sivol in the loop, but not use it for training, so that we can get predictions
+                        # for sivol later. 
+                        train_sivol = train_Y_batch[..., 0]
+                        if self.predict_flux:
+                            train_Y_batch = train_Y_batch[..., 1:]
+
+                        # Also store first two readings if predicting on fluxes to use for inverting intensification
+                        # calculation
+                        if self.predict_flux:
+                            train_X_batch_init = train_X_batch[:2]
+                            train_sivol_init = train_sivol[:2]
+
+                            train_X_batch = train_X_batch[2:]
+                            train_Y_batch = train_Y_batch[2:]
+                            train_sivol = train_sivol[2:]
+
+                        # Get losses and gradients from training w.r.t predicted variable
+                        loss_value_train, grads = self.grad(model, train_X_batch, train_Y_batch, loss_4d)
+
+                        # Apply gradients
+                        optimizer.apply_gradients(zip(grads, model.trainable_variables))
+
+                        # Get loss w.r.t sivol if predicting fluxes else append previously calculated loss
+                        if self.predict_flux:
+                            y_pred_train = model(np.append(train_X_batch_init, train_X_batch, axis=0), training=True)
+                            inn_train = np.sum(y_pred_train, axis=-1)
+                            train_sivol_pred = revert_intensification(inn=inn_train, initial_vol=train_sivol_init)
+                            train_sivol_pred = train_sivol_pred[2:]  # Remove initial volumes since they are ground truth
+
+                            sivol_loss_train_epoch.update_state(loss_3d(train_sivol, train_sivol_pred))
+                        else:
+                            sivol_loss_train_epoch.update_state(loss_value_train)
+
+                        print(f'Batch {batch_i}', end='\r')
+                        batch_i += 1
+
+                except StopIteration:
+
+                    # Begin iteration over test batches
+                    test_X_batches = batch_generator(data['test_X'], batch_size, batch_overlap)
+                    test_Y_batches = batch_generator(data['test_Y'], batch_size, batch_overlap)
+
+                    try:
+                        while True:
+
+                            test_X_batch = next(test_X_batches)
+                            test_Y_batch = next(test_Y_batches)
+
+                            # Remove sivol from Ys if predicting on fluxes, while saving sivol for loss calculation
+                            # We want to keep sivol in the loop, but not use it for training, so that we can get predictions
+                            # for sivol later. 
+                            test_sivol = test_Y_batch[..., 0]
+                            if self.predict_flux:
+                                test_Y_batch = test_Y_batch[..., 1:]
+
+                            # Also store first two readings if predicting on fluxes to use for inverting intensification
+                            # calculation
+                            if self.predict_flux:
+                                test_X_batch_init = test_X_batch[:2]
+                                test_sivol_init = test_sivol[:2]
+
+                                test_X_batch = test_X_batch[2:]
+                                test_Y_batch = test_Y_batch[2:]
+                                test_sivol = test_sivol[2:]
+
+                            # Get losses w.r.t sivol
+                            if self.predict_flux:
+                                y_pred_test = model(np.append(test_X_batch_init, test_X_batch, axis=0), training=True)
+                                inn_test = np.sum(y_pred_test, axis=-1)
+                                test_sivol_pred = revert_intensification(inn=inn_test, initial_vol=test_sivol_init)
+                                test_sivol_pred = test_sivol_pred[2:]  # Remove initial volumes since they are ground truth
+
+                                sivol_loss_test_epoch.update_state(loss_3d(test_sivol, test_sivol_pred))
+                            else:
+                                loss_value_test = self.get_loss_value(model, test_X_batch, test_Y_batch, loss_4d)
+                                sivol_loss_test_epoch.update_state(loss_value_test)
+
+                    except StopIteration:
+                        pass
+
+                    if save_example_maps is not None:
+                        ex_preds = model.predict(test_X_batch)
+                        true = test_Y_batch
+
+                        fig, axs = plt.subplots(1, 2, figsize=(8, 4))
+                        im1 = axs[0].imshow(np.ma.masked_where(~landmask, ex_preds[save_example_maps, 0, :, :, 0]), vmin=0, vmax=1)
+                        im2 = axs[1].imshow(np.ma.masked_where(~landmask, true[save_example_maps, 0, :, :, 0]), vmin=0, vmax=1)
+
+                        ex_preds_dir = os.path.join(self.save_path, 'predictions_by_epoch')
+                        ex_preds_path = os.path.join(ex_preds_dir, f'e_{epoch}_ts_{save_example_maps}.png' if self.suffix is None else f'e_{epoch}_ts_{save_example_maps}_{self.suffix}.png')
+
+                        if not os.path.exists(ex_preds_dir):
+                            os.mkdir(ex_preds_dir)
+
+                        plt.savefig(ex_preds_path)
+                        plt.close()
+
+                    sivol_loss_train_epoch = sivol_loss_train_epoch.result().numpy()
+                    sivol_loss_test_epoch = sivol_loss_test_epoch.result().numpy()
+
+                    print(f'Epoch: {epoch} -- train_loss: {sivol_loss_train_epoch} -- test_loss: {sivol_loss_test_epoch}')
+
+                    sivol_loss_train.append(sivol_loss_train_epoch)
+                    sivol_loss_test.append(sivol_loss_test_epoch)
+
+                    # Early stopping criteria (TODO: make into its own class)
+                    if sivol_loss_test_epoch < curr_best:
+                        curr_best = sivol_loss_test_epoch
+                        epochs_since_improvement = 0
+                    else:
+                        epochs_since_improvement += 1
+
+                    if epochs_since_improvement == early_stop_patience:
+                        break
+
+
+            # Get loss curve
+            loss_curve = pd.DataFrame(
+                {
+                    "iteration": [i] * len(sivol_loss_test),
+                    "test_loss": sivol_loss_test,
+                    "train_loss": sivol_loss_train,
+                }
+            )
+
+            # Get predictions on validation set (TODO: maybe batch this?)
+            preds_month_array = model.predict(data["valid_X"])
+            preds_month = {}
+            for var_i in range(preds_month_array.shape[-1]):
+
+                var_i_name = Y_vars[var_i]
+
+                preds_month[var_i_name] = xr.DataArray(
+                    preds_month_array[..., var_i],  # preds_month[..., 0],
+                    dims=("time", "timestep", "latitude", "longitude"),
+                    coords=dict(
+                        time=data["dates_valid"],
+                        timestep=range(self.num_timesteps_predict), 
+                        latitude=ds.latitude,
+                        longitude=ds.longitude,
+                    ),
+                )
+
+            preds_month = xr.Dataset(preds_month)
+
+            # Append loss / preds
+            preds = xr.concat([preds, preds_month], dim="time") if preds is not None else preds_month
+            loss_curves = loss_curves.append(loss_curve) if loss_curves is not None else loss_curve
+
+            # Save this version of the model
+            model.save(os.path.join(self.save_path, f"model_{self.month}_{i}"))
+
+            logging.info(f'Finished {i}th iteration in {round((time.time() - iter_start) / 60, 1)} minutes.')
+
+            i += 1
+
+            break
+
+        # Save results
+        preds_path = os.path.join(self.save_path, f'preds_{self.month}.nc' if self.suffix is None else f'preds_{self.month}_{self.suffix}.nc')
+        model_path = os.path.join(self.save_path, f'model_{self.month}' if self.suffix is None else f'model_{self.month}_{self.suffix}')
+        loss_path = os.path.join(self.save_path, f'loss_{self.month}' if self.suffix is None else f'loss_{self.month}_{self.suffix}.csv')
+
+        preds.to_netcdf(preds_path, mode="w")
+        model.save(model_path)
+        loss_curves.to_csv(loss_path, index=False)
+
+        logging.info(f"Results written to {self.save_path}")
 
 
 if __name__ == "__main__":
 
     logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+
+    start = time.time()
 
     # Parameters --------------------
     parser = argparse.ArgumentParser()
@@ -268,36 +367,33 @@ if __name__ == "__main__":
 
     # Read data -----------------------
     era5 = xr.open_zarr('/home/zgoussea/scratch/era5_hb_daily.zarr')
-
-    # Load GLORYS & set hour to zero to match ERA5
-    # glorys = read_glorys_from_cop().load()
-    # glorys = create_distance_grid(glorys)
-    # glorys['time'] = np.array([dt - 12 * 3600000000000 for dt in glorys.time.values])
     glorys = xr.open_zarr('/home/zgoussea/scratch/glorys12/glorys12_v2.zarr')
-    # glorys = xr.open_mfdataset([f'/home/zgoussea/scratch/glorys12/glorys12_{i}.nc' for i in np.arange(0, 1480, 20)])
-    # glorys['time'] = np.array([dt - 12 * 3600000000000 for dt in glorys.time.values])
 
     # Hudson Bay 
     glorys = glorys.sel(latitude=slice(51, 70), longitude=slice(-95, -65))
 
     # Smaller temporal window for testing
-    s, e = datetime.datetime(1993, 1, 1), datetime.datetime(1997, 1, 1)
+    s, e = datetime.datetime(1993, 1, 1), datetime.datetime(2006, 1, 1)
+    # s, e = datetime.datetime(1993, 1, 1), datetime.datetime(1996, 1, 1)
     era5 = era5.sel(time=slice(s, e))
     glorys = glorys.sel(time=slice(s, e))
 
-    logging.info('Read and sliced.')
+    logging.debug('Read and sliced.')
 
     # Interpolate ERA5 to match GLORYS
     era5 = era5.interp(latitude=glorys['latitude'], longitude=glorys['longitude'])
 
-    logging.info('Interpolated ERA5.')
+    logging.debug('Interpolated ERA5.')
 
     # Drop ERA5 SIC in favor of GLORYS12
     era5 = era5.drop('siconc')
 
+    # Get volume
+    glorys['sivol'] = glorys.siconc * glorys.sithick
+
     ds = xr.combine_by_coords([era5, glorys], coords=['latitude', 'longitude', 'time'], join="inner")
 
-    ds = ds.coarsen({'latitude': 5, 'longitude': 5}, boundary='trim').mean()
+    ds = ds.coarsen({'latitude': 4, 'longitude': 4}, boundary='trim').mean()
 
     # Train -----------------------------
 
@@ -308,12 +404,65 @@ if __name__ == "__main__":
     # with mirrored_strategy.scope():
     #     train(month, data_path=data_path, save_path=save_path)
 
-    logging.info('Start training.')
-    train(
+    X_vars = [
+        
+        # Sea ice -----------------
+        # 'siconc',
+        'sivol',
+        # 'sithick', 
+        
+        # Fluxes ------------------
+        'adv', 'div', 'res',  # Must include if self.predict_flux
+        # inn,
+
+        # GLORYS ------------------
+        # 'bottomT',  # Sea floor potential T
+        # 'mlotst',  # Mixed layer thickness
+        # 'so',  # Salinity
+        # 'thetao',  # Sea water potential T
+        # 'uo',  # Sea water velocity (E)
+        # 'vo',  # Sea water velocity (N)
+        # 'usi',  # Sea ice velocity (E)
+        # 'vsi',  # Sea ice velocity (N)
+        # 'zos',  # Sea surface height
+
+        # ERA5 --------------------
+        # 'd2m',  # 2m dewpoint
+        # 'e',  # Evaporation
+        # 'fg10',  # 10m wind gust since previous
+        # 'msl',  # Mean sea level pressure
+        # 'mwd',  # Mean wave direction
+        # 'mwp',  # Mean wave period
+        # 'sf',  # Snowfall
+        # 'slhf',  # Surface latent heat flux
+        # 'smlt',  # Snowmelt
+        'sshf',  # Surface sensible heat flux
+        # 'ssrd',  # Surface solar radiation downward
+        'sst',  # Sea surface temperature
+        # 'swh',  # Significant wave height
+        't2m',  # 2m temperature
+        # 'tcc',  # Total cloud cover
+        # 'tp',  # Precip
+        'u10',  # Wind speed (E)
+        'v10'  # Wind speed (N)
+    ]
+
+    m = Model(
         month,
-        ds=ds,
+        predict_flux=True,
+        num_timesteps_predict=60,
+        num_timesteps_input=3,
+        num_training_years=10,
         save_path=save_path,
-        X_vars=['siconc', 'div', 'adv', 'res', 't2m'],
-        predict_flux=True)
+        suffix='fluxes'
+        )
 
+    m.train(
+        ds=ds,
+        X_vars=X_vars,
+        save_example_maps=None,
+        early_stop_patience=20,
+        batch_size=16,
+        )
 
+    logging.info(f'Finished in {round((time.time() - start) / 60, 1)} minutes.')
