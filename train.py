@@ -25,8 +25,8 @@ BINARY = True
 
 # First number referring to initial training, second for subsequent training
 EPOCHS = (
-    200,
-    100,
+    180,
+    80,
 )
 
 BATCH_SIZE = 16

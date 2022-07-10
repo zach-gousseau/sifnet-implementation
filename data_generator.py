@@ -11,10 +11,12 @@ BINARY_THRESH = 0.15
 class DataGen:
     def __init__(self):
         self.scaler = StandardScaler()
+        self.X_vars = None
+        self.Y_vars = None
 
     @staticmethod
-    def get_landmask(ds):
-        return np.logical_not(np.isnan(ds.sic.isel(time=0)))
+    def get_landmask_from_nans(ds, var_='siconc'):
+        return np.logical_not(np.isnan(ds[var_].isel(time=0)))
 
     @staticmethod
     def create_timesteps(arr, num_timesteps=3):
@@ -38,17 +40,55 @@ class DataGen:
         ds = ds.drop_vars("climate_year")
         return ds
 
-    def get_data(self, path="/home/zgoussea/scratch/era5_hb_daily.zarr"):
-        ds = xr.open_zarr(path)
-        ds = xr.merge([ds[["siconc"]], ds.drop("siconc")])
-        ds = ds.rename({"siconc": "sic"})
+    def get_data(
+        self,
+        path="/home/zgoussea/scratch/era5_hb_daily.zarr",
+        ds=None,
+        add_add=True,
+        X_vars=None,
+        Y_vars=['siconc']
+        ):
 
-        # Only these variables
-        vars = ["sic", "sst", "t2m", "sshf", "u10", "v10"]
-        ds = ds[vars]
+        if ds is None:
+            ds = xr.open_zarr(path)
+        
+        logging.debug('Read Zarr store.')
 
         # Calculate ADD
-        ds = self.get_add(ds)
+        if add_add:
+            ds = self.get_add(ds)
+
+        logging.debug('Calculated accumulated degree-days (ADD)')
+
+        self.Y_vars = Y_vars
+
+        # If no input variables specified, use all except the output variables
+        if X_vars is None:
+            logging.info('No input variables specified, using all available')
+            
+            # Re-order dataset so predictand variables are first 
+            # This allows subsequent functions to assume the first N variables are the 
+            # predictands (once it is transformed to unnamed numpy arrays)
+            self.X_vars = list(ds.data_vars)
+            for var_ in Y_vars:
+                self.X_vars.remove(var_)
+            self.X_vars = self.Y_vars + self.X_vars
+        else:
+            self.X_vars = X_vars
+
+        if add_add:
+            self.X_vars.append('add')
+
+        assert np.all([var_ in ds.data_vars for var_ in self.X_vars])
+        assert np.all([var_ in ds.data_vars for var_ in self.Y_vars])
+        assert len(self.X_vars) > 0
+        assert len(self.Y_vars) > 0
+        assert np.all([var_ in self.X_vars for var_ in self.Y_vars])  # Ensure predicted variable is in the full set of variables
+
+        logging.info(f"Predictor variable(s): ({len(self.X_vars)}) {self.X_vars}")
+        logging.info(f"Predictand variable(s): ({len(self.Y_vars)}) {self.Y_vars}")
+
+        ds = ds[self.X_vars]
 
         ds = ds.assign_coords({"month": ds.time.dt.month})
         return ds
@@ -132,8 +172,8 @@ class DataGen:
         self.scaler = self.scaler.partial_fit(arr.reshape(-1, np.prod(arr.shape[1:])).T)
 
     def normalize(self, arr):
-        print(arr.shape)
-        print(arr.reshape(-1, np.prod(arr.shape[-1])).T.shape)
+        # print(arr.shape)
+        # print(arr.reshape(-1, np.prod(arr.shape[-1])).T.shape)
         return self.scaler.transform(arr.reshape(-1, arr.shape[-1])).reshape(arr.shape)
 
     def get_transformed_value(self, var_index, value):
@@ -143,15 +183,15 @@ class DataGen:
         trans_vector = self.scaler.transform(input_vector)
         return trans_vector[0][var_index]
 
-    def split_xy(self, arr, num_timesteps_predict, num_timesteps_input):
+    def split_xy(self, arr, num_timesteps_predict, num_timesteps_input, split_index):
         # Split x and y temporally
         Y = arr[:, :, :, :, -(num_timesteps_predict):]
         X = arr[:, :, :, :, :num_timesteps_input]
 
-        # Get only SIC from the Y data Assumes SIC is the first variable !!
+        # Extract Y variables at the specified index
         # TODO: Extracting SIC as the target variable this late creates a larger array than is necessary. Try to find a
         # way to do the splitting into X/Y earlier to avoid this.
-        Y = np.expand_dims(Y[0], 0)
+        Y = Y[:split_index]
 
         # Reshape
         Y = np.transpose(Y, [1, 4, 2, 3, 0])
@@ -169,18 +209,12 @@ class DataGen:
         valid_only=False,
     ):
 
-        sic_index = 0
-
-        data_vars = list(ds.data_vars)
-        logging.info(f"Read dataset with variables: {data_vars}")
-        logging.info(
-            f"Assuming variable {sic_index} ({data_vars[sic_index]}) is the SIC variable"
-        )
-
         # Create expanded dataset (add timesteps)
         ds_timesteps = ds.rolling(
             time=num_timesteps_input + num_timesteps_predict
         ).construct("timesteps")
+
+        logging.debug('Constructed ')
 
         # Remove first num_timesteps_input timesteps and assign the launch date
         # dates to be the de-facto dates for each timestep.
@@ -210,7 +244,7 @@ class DataGen:
             valid_array = np.nan_to_num(np.array(ds_valid.to_array()))
 
             valid_X, valid_Y = self.split_xy(
-                valid_array, num_timesteps_predict, num_timesteps_input
+                valid_array, num_timesteps_predict, num_timesteps_input, split_index=len(self.Y_vars)
             )
 
             # Normalize X only
@@ -233,10 +267,10 @@ class DataGen:
                 test_array = np.nan_to_num(np.array(ds_test.to_array()))
 
                 train_X, train_Y = self.split_xy(
-                    train_array, num_timesteps_predict, num_timesteps_input
+                    train_array, num_timesteps_predict, num_timesteps_input, split_index=len(self.Y_vars)
                 )
                 test_X, test_Y = self.split_xy(
-                    test_array, num_timesteps_predict, num_timesteps_input
+                    test_array, num_timesteps_predict, num_timesteps_input, split_index=len(self.Y_vars)
                 )
 
                 # Normalize X only

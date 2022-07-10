@@ -73,6 +73,11 @@ def spatial_feature_pyramid_net_vectorized_ND(**kwargs):
     else:
         debug = False
 
+    if 'num_output_vars' in kwargs:
+        num_output_vars = kwargs['num_output_vars']
+    else:
+        num_output_vars = 1
+
     inputs = tf.keras.Input(shape=input_shape)
 
     n_features = 24
@@ -112,7 +117,7 @@ def spatial_feature_pyramid_net_vectorized_ND(**kwargs):
                                      kernel_regularizer=tf.keras.regularizers.l2(l2)),
                            name='sigmoid_pre_out')(x)
 
-    x = kl.TimeDistributed(kl.Conv2D(1, (1, 1), activation='sigmoid', padding='same',
+    x = kl.TimeDistributed(kl.Conv2D(num_output_vars, (1, 1), activation='sigmoid', padding='same',
                                      kernel_regularizer=tf.keras.regularizers.l2(l2)),
                            name='sigmoid_out')(x)
     out = x
@@ -186,6 +191,10 @@ def spatial_feature_pyramid_net_hiddenstate_ND(**kwargs):
             raise TypeError('Received debug of non-bool type')
     else:
         debug = False
+    if 'num_output_vars' in kwargs:
+        num_output_vars = kwargs['num_output_vars']
+    else:
+        num_output_vars = 1
 
     inputs = tf.keras.Input(shape=input_shape)
 
@@ -227,7 +236,7 @@ def spatial_feature_pyramid_net_hiddenstate_ND(**kwargs):
                                      kernel_regularizer=tf.keras.regularizers.l2(l2)),
                            name='sigmoid_pre_out')(x)
 
-    x = kl.TimeDistributed(kl.Conv2D(1, (1, 1), activation='sigmoid', padding='same',
+    x = kl.TimeDistributed(kl.Conv2D(num_output_vars, (1, 1), activation='sigmoid', padding='same',
                                      kernel_regularizer=tf.keras.regularizers.l2(l2)),
                            name='sigmoid_out')(x)
     out = x
