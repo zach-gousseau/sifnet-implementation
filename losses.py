@@ -6,9 +6,23 @@ from sklearn.metrics import accuracy_score
 
 def masked_MSE(mask):
     def loss(y_true, y_pred):
+
+        y_pred_c = y_pred
+        y_true_c = y_true
+
         y_pred = tf.convert_to_tensor(y_pred)
         y_true = tf.cast(y_true, y_pred.dtype)
+        # print(y_pred.shape)
+        # print(y_true.shape)
         sq_diff = tf.multiply(tf.math.squared_difference(y_pred, y_true), mask)
+        # print(sq_diff)
+        # print(mask)
+        if np.isnan(tf.reduce_mean(sq_diff).numpy()):
+            with open('test.npy', 'wb') as f:
+                np.save(f, y_pred_c)
+                np.save(f, y_true_c)
+                np.save(f, mask)
+                np.save(f, sq_diff)
         return tf.reduce_mean(sq_diff)
     return loss
 
