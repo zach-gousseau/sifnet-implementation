@@ -1,5 +1,6 @@
 import logging
 import sys
+import os
 
 import numpy as np
 import xarray as xr
@@ -93,9 +94,39 @@ class DataGen:
         ds = ds.assign_coords({"month": ds.time.dt.month})
         return ds
 
-    @staticmethod
-    def normalize_xarray(ds):
-        return (ds - ds.mean()) / ds.std()
+    def normalize_xarray(self, ds, cache=True):
+        
+        if cache:
+            fn = np.datetime_as_string(ds.time.values[0])[:10] + '-' + \
+                np.datetime_as_string(ds.time.values[0])[:10] + '-' + \
+                ','.join(list(ds.data_vars))
+                
+            if os.path.exists(f'cache/mean_{fn}.nc'):
+                u = xr.open_dataset(f'cache/mean_{fn}.nc')
+            else:
+                u = ds.mean()
+                try:
+                    u.to_netcdf(f'cache/mean_{fn}.nc')
+                except PermissionError:
+                    # If it's currently being written to by a parallel process just ignore it.
+                    pass
+            
+            if os.path.exists(f'cache/std_{fn}.nc'):
+                std = xr.open_dataset(f'cache/std_{fn}.nc')
+            else:
+                std = ds.std()
+                try:
+                    std.to_netcdf(f'cache/std_{fn}.nc')
+                except PermissionError:
+                    # If it's currently being written to by a parallel process just ignore it.
+                    pass
+        else:
+            u = ds.mean()
+            std = ds.std()
+        
+        self.u = u
+        self.std = std
+        return (ds - u) / std
 
     @staticmethod
     def get_3_month_window(center_month):
@@ -120,8 +151,7 @@ class DataGen:
         nominal_years_array = np.append(
             0,
             np.cumsum(
-                (ds_month.time.values[1:] - ds_month.time.values[:-1]).view(int)
-                > (24 * 60 * 60 * 1e9)
+                (ds_month.time.values[1:] - ds_month.time.values[:-1]).view(int) > (24 * 60 * 60 * 1e9)
             ),
         )
         nominal_years_array = xr.DataArray(
@@ -172,8 +202,6 @@ class DataGen:
         self.scaler = self.scaler.partial_fit(arr.reshape(-1, np.prod(arr.shape[1:])).T)
 
     def normalize(self, arr):
-        # print(arr.shape)
-        # print(arr.reshape(-1, np.prod(arr.shape[-1])).T.shape)
         return self.scaler.transform(arr.reshape(-1, arr.shape[-1])).reshape(arr.shape)
 
     def get_transformed_value(self, var_index, value):
@@ -207,7 +235,11 @@ class DataGen:
         num_training_years=3,
         binary_sic=True,
         valid_only=False,
+        normalize=True,
     ):
+        
+        if normalize:
+            ds = self.normalize_xarray(ds)
 
         # Create expanded dataset (add timesteps)
         ds_timesteps = ds.rolling(
@@ -234,7 +266,7 @@ class DataGen:
             )
 
             # Update the normalization scaler with just the first timestep of the train array
-            self.update_scaler(np.array(ds_train.isel(timesteps=0).to_array()))
+            # self.update_scaler(np.array(ds_train.isel(timesteps=0).to_array()))
 
             # Since this function can also be used to only get validation data (for evaluating results),
             # we first process the validation data only, then add the train/test if it is desired. Maybe not
@@ -248,7 +280,7 @@ class DataGen:
             )
 
             # Normalize X only
-            valid_X = self.normalize(valid_X)
+            # valid_X = self.normalize(valid_X)
 
             # If we want binary ice off / on instead of SIC
             if binary_sic:
@@ -274,8 +306,8 @@ class DataGen:
                 )
 
                 # Normalize X only
-                train_X = self.normalize(train_X)
-                test_X = self.normalize(test_X)
+                # train_X = self.normalize(train_X)
+                # test_X = self.normalize(test_X)
 
                 # If we want binary ice off / on instead of SIC
                 if binary_sic:

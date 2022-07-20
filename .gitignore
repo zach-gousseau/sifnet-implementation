@@ -1,7 +1,11 @@
 # User
 .vscode/
 figs/
-glorys12/
+glorys12/motuclient/
+glorys12/motu.sh/
+glorys12/pydap*
+scratch.py
+cache/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
