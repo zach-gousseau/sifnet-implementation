@@ -1,5 +1,6 @@
 import logging
 import sys
+import os
 
 import numpy as np
 import xarray as xr
@@ -14,9 +15,8 @@ class DataGen:
         self.X_vars = None
         self.Y_vars = None
 
-    @staticmethod
-    def get_landmask_from_nans(ds, var_='siconc'):
-        return np.logical_not(np.isnan(ds[var_].isel(time=0)))
+    def create_landmask_from_nans(self, ds, var_='zos'):
+        self.landmask = np.logical_not(np.isnan(ds[var_].isel(time=0)))
 
     @staticmethod
     def create_timesteps(arr, num_timesteps=3):
@@ -77,13 +77,15 @@ class DataGen:
             self.X_vars = X_vars
 
         if add_add:
-            self.X_vars.append('add')
+            if 'add' not in self.X_vars:
+                self.X_vars.append('add')
 
         assert np.all([var_ in ds.data_vars for var_ in self.X_vars])
         assert np.all([var_ in ds.data_vars for var_ in self.Y_vars])
         assert len(self.X_vars) > 0
         assert len(self.Y_vars) > 0
-        assert np.all([var_ in self.X_vars for var_ in self.Y_vars])  # Ensure predicted variable is in the full set of variables
+        # Ensure predicted variable is in the full set of variables
+        assert np.all([var_ in self.X_vars for var_ in self.Y_vars]), f'Not all of y variables ({self.Y_vars}) are in x variables ({self.X_vars})'
 
         logging.info(f"Predictor variable(s): ({len(self.X_vars)}) {self.X_vars}")
         logging.info(f"Predictand variable(s): ({len(self.Y_vars)}) {self.Y_vars}")
@@ -91,11 +93,50 @@ class DataGen:
         ds = ds[self.X_vars]
 
         ds = ds.assign_coords({"month": ds.time.dt.month})
+        self.ds = ds
         return ds
 
-    @staticmethod
-    def normalize_xarray(ds):
-        return (ds - ds.mean()) / ds.std()
+    def get_mean_and_variance(self, ds, cache=True):
+        cached_fn = f'{ds.latitude.values.min():.1f}-{ds.latitude.values.max():.1f}-' + \
+                    f'{ds.longitude.values.min():.1f}-{ds.longitude.values.max():.1f}'
+        if cache:
+            try:
+                u, std = self.read_mean_and_variance(cached_fn)
+            except FileNotFoundError:
+                logging.debug('Asked for cached mean/std values but the file did not exist. Resorting to calculating.')
+                u, std = self.calculate_mean_and_variance(ds)
+                u.to_netcdf(f'cache/mean_{cached_fn}.nc')
+                std.to_netcdf(f'cache/std_{cached_fn}.nc')
+
+        else:
+            u, std = self.calculate_mean_and_variance(ds)
+
+        for var_ in u:
+            assert not np.isnan(u[var_]), f'Encountered NaN in means! ({var_})'
+            assert not np.isnan(std[var_]), f'Encountered NaN in standard deviations! ({var_})'
+
+        self.u, self.std = u, std
+        return u, std
+
+    def normalize_xarray(self, ds, cache=True):
+        u, std = self.get_mean_and_variance(ds, cache=cache)
+        return (ds - u) / std
+
+    def calculate_mean_and_variance(self, ds, n_sample=None):
+        if n_sample is not None:
+            ds = ds.isel(time=np.random.choice(ds.time.size, size=n_sample, replace=False))
+            
+        u, std = ds.mean(skipna=True), ds.std(skipna=True)
+        return u, std 
+
+    def read_mean_and_variance(self, fn):
+        if not os.path.exists(f'cache/mean_{fn}.nc') or not os.path.exists(f'cache/std_{fn}.nc'):
+            raise FileNotFoundError
+            
+        u = xr.open_dataset(f'cache/mean_{fn}.nc')
+        std = xr.open_dataset(f'cache/std_{fn}.nc')
+        
+        return u, std 
 
     @staticmethod
     def get_3_month_window(center_month):
@@ -120,8 +161,7 @@ class DataGen:
         nominal_years_array = np.append(
             0,
             np.cumsum(
-                (ds_month.time.values[1:] - ds_month.time.values[:-1]).view(int)
-                > (24 * 60 * 60 * 1e9)
+                (ds_month.time.values[1:] - ds_month.time.values[:-1]).view(int) > (24 * 60 * 60 * 1e9)
             ),
         )
         nominal_years_array = xr.DataArray(
@@ -172,8 +212,6 @@ class DataGen:
         self.scaler = self.scaler.partial_fit(arr.reshape(-1, np.prod(arr.shape[1:])).T)
 
     def normalize(self, arr):
-        # print(arr.shape)
-        # print(arr.reshape(-1, np.prod(arr.shape[-1])).T.shape)
         return self.scaler.transform(arr.reshape(-1, arr.shape[-1])).reshape(arr.shape)
 
     def get_transformed_value(self, var_index, value):
@@ -207,14 +245,20 @@ class DataGen:
         num_training_years=3,
         binary_sic=True,
         valid_only=False,
+        normalize=True,
     ):
+
+        if normalize:
+            ds = self.normalize_xarray(ds, cache=False)
+            
+        # logging.debug('Normalized the dataset')
 
         # Create expanded dataset (add timesteps)
         ds_timesteps = ds.rolling(
             time=num_timesteps_input + num_timesteps_predict
         ).construct("timesteps")
 
-        logging.debug('Constructed ')
+        logging.debug('Constructed timesteps')
 
         # Remove first num_timesteps_input timesteps and assign the launch date
         # dates to be the de-facto dates for each timestep.
@@ -224,9 +268,14 @@ class DataGen:
         )
         ds_timesteps = ds_timesteps.assign_coords(time=launch_dates)
 
-        for ds_train, ds_test, ds_valid in self.data_split(
-            ds_timesteps, num_training_years, month
-        ):
+        for ds_train, ds_test, ds_valid in self.data_split(ds_timesteps, num_training_years, month):
+            # if normalize:
+            #     logging.debug('Normalizing the datasets')
+            #     ds_train = self.normalize_xarray(ds_train, cache=False)
+            #     ds_test = self.normalize_xarray(ds_test, cache=False)
+            #     ds_valid = self.normalize_xarray(ds_valid, cache=False)
+
+            #     logging.debug('Normalized the datasets')
 
             # Save dates
             dates_train, dates_test, dates_valid = (
@@ -234,21 +283,26 @@ class DataGen:
             )
 
             # Update the normalization scaler with just the first timestep of the train array
-            self.update_scaler(np.array(ds_train.isel(timesteps=0).to_array()))
+            # self.update_scaler(np.array(ds_train.isel(timesteps=0).to_array()))
 
             # Since this function can also be used to only get validation data (for evaluating results),
             # we first process the validation data only, then add the train/test if it is desired. Maybe not
             # the most intuitive way of doing this.
 
-            # Convert to numpy & replace NaNs with 0s
-            valid_array = np.nan_to_num(np.array(ds_valid.to_array()))
+            logging.debug(f'Variable order: {list(ds_valid.data_vars)}')
+            sivol_index = list(ds_valid.data_vars).index("sivol")
+            
+            # Convert to numpy & replace NaNs with 0s (ensure sivol NaNs are land and not 0s)
+            valid_array = np.array(ds_valid.to_array())
+            valid_array[sivol_index][np.isnan(valid_array[sivol_index])] = (0 - self.u.sivol) / self.std.sivol
+            valid_array = np.nan_to_num(valid_array)
 
             valid_X, valid_Y = self.split_xy(
                 valid_array, num_timesteps_predict, num_timesteps_input, split_index=len(self.Y_vars)
             )
 
             # Normalize X only
-            valid_X = self.normalize(valid_X)
+            # valid_X = self.normalize(valid_X)
 
             # If we want binary ice off / on instead of SIC
             if binary_sic:
@@ -263,8 +317,13 @@ class DataGen:
 
             if not valid_only:
                 # Convert to numpy & replace NaNs with 0s
-                train_array = np.nan_to_num(np.array(ds_train.to_array()))
-                test_array = np.nan_to_num(np.array(ds_test.to_array()))
+                train_array = np.array(ds_train.to_array())
+                train_array[sivol_index][np.isnan(train_array[sivol_index])] = (0 - self.u.sivol) / self.std.sivol
+                train_array = np.nan_to_num(train_array)
+                
+                test_array = np.array(ds_test.to_array())
+                test_array[sivol_index][np.isnan(test_array[sivol_index])] = (0 - self.u.sivol) / self.std.sivol
+                test_array = np.nan_to_num(test_array)
 
                 train_X, train_Y = self.split_xy(
                     train_array, num_timesteps_predict, num_timesteps_input, split_index=len(self.Y_vars)
@@ -274,8 +333,8 @@ class DataGen:
                 )
 
                 # Normalize X only
-                train_X = self.normalize(train_X)
-                test_X = self.normalize(test_X)
+                # train_X = self.normalize(train_X)
+                # test_X = self.normalize(test_X)
 
                 # If we want binary ice off / on instead of SIC
                 if binary_sic:
@@ -342,3 +401,4 @@ if __name__ == "__main__":
             plt.imshow(data[y][-20, 0, :, :, 0])
             plt.savefig(f"figs/{y}_2.png")
         break
+    

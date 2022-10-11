@@ -78,7 +78,17 @@ def spatial_feature_pyramid_net_vectorized_ND(**kwargs):
     else:
         num_output_vars = 1
 
+    if 'sigmoid_out' in kwargs:
+        if kwargs['sigmoid_out']:
+            out_activation = 'sigmoid'
+        else:
+            out_activation = 'linear'
+    else:
+        out_activation = 'sigmoid'
+
     inputs = tf.keras.Input(shape=input_shape)
+    
+    inputs = kl.BatchNormalization()(inputs)
 
     n_features = 24
 
@@ -105,19 +115,24 @@ def spatial_feature_pyramid_net_vectorized_ND(**kwargs):
 
     x = kl.TimeDistributed(kl.Conv2D(48, (1, 1), activation='linear', padding='same', name='nin1',
                                      kernel_regularizer=tf.keras.regularizers.l2(l2)))(x)
+    x = kl.BatchNormalization()(x)
     x = LeakyReLU(alpha)(x)
     x = kl.TimeDistributed(kl.Conv2D(32, (1, 1), activation='linear', padding='same', name='nin2',
                                      kernel_regularizer=tf.keras.regularizers.l2(l2)))(x)
+    x = kl.BatchNormalization()(x)
     x = LeakyReLU(alpha)(x)
     x = kl.TimeDistributed(kl.Conv2D(16, (1, 1), activation='linear', padding='same', name='nin3',
                                      kernel_regularizer=tf.keras.regularizers.l2(l2)))(x)
+    x = kl.BatchNormalization()(x)
     x = LeakyReLU(alpha)(x)
 
-    x = kl.TimeDistributed(kl.Conv2D(8, (1,1), activation='sigmoid', padding='same',
+    x = kl.TimeDistributed(kl.Conv2D(8, (1,1), activation=out_activation, padding='same',
                                      kernel_regularizer=tf.keras.regularizers.l2(l2)),
                            name='sigmoid_pre_out')(x)
+    x = kl.BatchNormalization()(x)
+    x = LeakyReLU(alpha)(x)
 
-    x = kl.TimeDistributed(kl.Conv2D(num_output_vars, (1, 1), activation='sigmoid', padding='same',
+    x = kl.TimeDistributed(kl.Conv2D(num_output_vars, (1, 1), activation=out_activation, padding='same',
                                      kernel_regularizer=tf.keras.regularizers.l2(l2)),
                            name='sigmoid_out')(x)
     out = x
@@ -196,7 +211,17 @@ def spatial_feature_pyramid_net_hiddenstate_ND(**kwargs):
     else:
         num_output_vars = 1
 
+    if 'sigmoid_out' in kwargs:
+        if kwargs['sigmoid_out']:
+            out_activation = 'sigmoid'
+        else:
+            out_activation = 'linear'
+    else:
+        out_activation = 'sigmoid'
+
     inputs = tf.keras.Input(shape=input_shape)
+    
+    inputs = kl.BatchNormalization()(inputs)
 
     n_features = 24
 
@@ -224,21 +249,37 @@ def spatial_feature_pyramid_net_hiddenstate_ND(**kwargs):
 
     x = kl.TimeDistributed(kl.Conv2D(48, (1, 1), activation='linear', padding='same', name='nin1',
                                      kernel_regularizer=tf.keras.regularizers.l2(l2)))(x)
+    
+    x = kl.BatchNormalization()(x)
     x = LeakyReLU(alpha)(x)
     x = kl.TimeDistributed(kl.Conv2D(32, (1, 1), activation='linear', padding='same', name='nin2',
                                      kernel_regularizer=tf.keras.regularizers.l2(l2)))(x)
+    x = kl.BatchNormalization()(x)
     x = LeakyReLU(alpha)(x)
     x = kl.TimeDistributed(kl.Conv2D(16, (1, 1), activation='linear', padding='same', name='nin3',
                                      kernel_regularizer=tf.keras.regularizers.l2(l2)))(x)
+    x = kl.BatchNormalization()(x)
     x = LeakyReLU(alpha)(x)
 
-    x = kl.TimeDistributed(kl.Conv2D(8, (1,1), activation='sigmoid', padding='same',
+    x = kl.TimeDistributed(kl.Conv2D(8, (1,1), activation=out_activation, padding='same',
                                      kernel_regularizer=tf.keras.regularizers.l2(l2)),
                            name='sigmoid_pre_out')(x)
+    x = kl.BatchNormalization()(x)
+    x = LeakyReLU(alpha)(x)
 
-    x = kl.TimeDistributed(kl.Conv2D(num_output_vars, (1, 1), activation='sigmoid', padding='same',
+    x = kl.TimeDistributed(kl.Conv2D(num_output_vars, (1, 1), activation=out_activation, padding='same',
                                      kernel_regularizer=tf.keras.regularizers.l2(l2)),
                            name='sigmoid_out')(x)
     out = x
 
     return tf.keras.Model(inputs=inputs, outputs=out)
+
+
+if __name__ == '__main__':
+    model = spatial_feature_pyramid_net_hiddenstate_ND(
+    input_shape=(3, 77, 121, 8),
+    output_steps=4,
+    num_output_vars=1,
+    )
+
+    print(model.count_params())
