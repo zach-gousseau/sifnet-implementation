@@ -16,14 +16,24 @@ if __name__ == "__main__":
 
     start = time.time()
     
+    # ds = read_and_combine_glorys_era5(
+    #     era5='/home/zgoussea/scratch/era5_hb_daily.zarr',
+    #     glorys='/home/zgoussea/scratch/glorys12/glorys12_v2.zarr',
+    #     start_year=1993,
+    #     end_year=2001,
+    #     lat_range=(51, 70),  # Hudson Bay
+    #     lon_range=(-95, -65),  # Hudson Bay
+    #     coarsen=4,
+    # )
+
     ds = read_and_combine_glorys_era5(
-        era5_path='/home/zgoussea/scratch/era5_hb_daily.zarr',
-        glorys_path='/home/zgoussea/scratch/glorys12/glorys12_v2.zarr',
+        era5='/home/zgoussea/scratch/era5_nwt_daily.zarr',
+        glorys='/home/zgoussea/scratch/glorys12/glorys12_v2.zarr',
         start_year=1993,
-        end_year=2006,
-        lat_range=(51, 70),  # Hudson Bay
-        lon_range=(-95, -65),  # Hudson Bay
-        coarsen=4,
+        end_year=2001,
+        lat_range=(68, 77),
+        lon_range=(-140, -110),
+        coarsen=1,
     )
 
     # Parameters --------------------
@@ -37,9 +47,14 @@ if __name__ == "__main__":
     predict_flux = bool(int(args['predict_fluxes']))
     suffix = args['suffix']
 
+    if month == 0:
+        months = range(1, 13)
+    else:
+        months = [month]
+
     # Directory ---------------------
 
-    save_path = "/home/zgoussea/scratch/sifnet_results/compare"
+    save_path = "/home/zgoussea/scratch/sifnet_results/compare_5years_30days_nwt_fullres"
     # save_path = None
 
     if save_path is not None:
@@ -47,32 +62,34 @@ if __name__ == "__main__":
             os.makedirs(save_path)
             
     # First number referring to initial training, second for subsequent training
-    epochs = (100, 60)
+    epochs = (100, 20)
 
     # Train -------------------------
-
-    m = Model(
-        month,
-        predict_flux=predict_flux,
-        num_timesteps_predict=60,
-        num_timesteps_input=3,
-        num_training_years=10,
-        save_path=save_path,
-        suffix=suffix
-        )
+    for month in months:
+        m = Model(
+            month,
+            predict_flux=predict_flux,
+            num_timesteps_predict=30,
+            num_timesteps_input=3,
+            num_training_years=5,
+            save_path=save_path,
+            suffix=suffix
+            )
     
     
-    # Use multiple GPUs
-    # mirrored_strategy = tf.distribute.MultiWorkerMirroredStrategy()
-    # with mirrored_strategy.scope():
+        # Use multiple GPUs
+        # mirrored_strategy = tf.distribute.MultiWorkerMirroredStrategy()
+        # with mirrored_strategy.scope():
 
-    m.train(
-        ds=ds,
-        X_vars=X_VARS,
-        epochs=epochs,
-        save_example_maps=None,
-        early_stop_patience=20,
-        batch_size=8,
-        )
+        m.train(
+            ds=ds,
+            X_vars=X_VARS,
+            epochs=epochs,
+            save_example_maps=None,
+            early_stop_patience=5,
+            batch_size=16,
+            )
 
-    logging.info(f'Finished in {round((time.time() - start) / 60, 1)} minutes.')
+        logging.info(f'Finished month {month} in {round((time.time() - start) / 60, 1)} minutes.')
+
+        # python -i main.py --month 0 --predict-fluxes 0 --suffix test

@@ -99,11 +99,19 @@ def intensification(Vol, nsecs):
 def revert_intensification(inn, initial_vol, nsecs):
     return invert_lagged_cumsum(inn * (2 * nsecs), initial_vol)
 
-def calculate_all(ds):
-    siconc = ds.siconc.values
-    sithick = ds.sithick.values
-    vsi = ds.vsi.values
-    usi = ds.usi.values
+def calculate_all(ds, landmask, suffix=''):
+    siconc = np.nan_to_num(ds.siconc.values)
+    sithick = np.nan_to_num(ds.sithick.values)
+    vsi = np.nan_to_num(ds.vsi.values)
+    usi = np.nan_to_num(ds.usi.values)
+    
+    # Replace 0s with NaNs where it does not intersect the landmask
+    landmask = np.broadcast_to(landmask, siconc.shape)
+    
+    siconc[~landmask] = np.nan
+    sithick[~landmask] = np.nan
+    vsi[~landmask] = np.nan
+    usi [~landmask] = np.nan
 
     vol = siconc * sithick
 
@@ -116,10 +124,10 @@ def calculate_all(ds):
 
     res = inn - adv - div  # Residual
 
-    ds['div'] = (('time', 'latitude', 'longitude'), div)
-    ds['adv'] = (('time', 'latitude', 'longitude'), adv)
-    ds['inn'] = (('time', 'latitude', 'longitude'), inn)
-    ds['res'] = (('time', 'latitude', 'longitude'), res)
+    ds['div' + suffix] = (('time', 'latitude', 'longitude'), div)
+    ds['adv' + suffix] = (('time', 'latitude', 'longitude'), adv)
+    ds['inn' + suffix] = (('time', 'latitude', 'longitude'), inn)
+    ds['res' + suffix] = (('time', 'latitude', 'longitude'), res)
     return ds
 
 

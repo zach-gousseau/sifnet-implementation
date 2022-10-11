@@ -47,7 +47,7 @@ X_VARS = [
     # 'sithick', 
     
     # Fluxes ------------------
-    'adv', 'div', 'res',  # Must include if self.predict_flux
+    'adv_v2', 'div_v2', 'res_v2',  # Must include if self.predict_flux
     # inn,
 
     # GLORYS ------------------
@@ -59,7 +59,7 @@ X_VARS = [
     # 'vo',  # Sea water velocity (N)
     # 'usi',  # Sea ice velocity (E)
     # 'vsi',  # Sea ice velocity (N)
-    # 'zos',  # Sea surface height
+    'zos',  # Sea surface height
 
     # ERA5 --------------------
     # 'd2m',  # 2m dewpoint
@@ -106,7 +106,7 @@ class Model:
         self.suffix = suffix
         self.month = month
         
-        self.Y_vars = ['adv', 'div', 'res'] if self.predict_flux else ['sivol']
+        self.Y_vars = ['adv_v2', 'div_v2', 'res_v2'] if self.predict_flux else ['sivol']
         self.X_vars = []
         
         if self.save_path is None:
@@ -181,8 +181,9 @@ class Model:
             Y_vars=self.Y_vars + ['sivol'] if self.predict_flux else self.Y_vars
             )
 
-        # Get landmask from SIC
-        landmask = self.data_gen.get_landmask_from_nans(ds, var_='sivol')
+        # Get landmask from ZOS
+        self.data_gen.create_landmask_from_nans(ds, var_='zos')
+        landmask = self.data_gen.landmask
 
         # Loss function
         loss_3d, loss_4d = self.create_loss_function(binary=False, mask=landmask)
@@ -211,7 +212,7 @@ class Model:
         model = spatial_feature_pyramid_net_hiddenstate_ND(
             input_shape=(self.num_timesteps_input, *image_size, num_vars),
             output_steps=self.num_timesteps_predict,
-            l2=0,
+            l2=0.001,
             num_output_vars=self.num_vars_to_predict,
             sigmoid_out=False,
         )
@@ -226,6 +227,8 @@ class Model:
 
             num_epochs = epochs[0] if i == 0 else epochs[1]
 
+            model_loss_train = []
+            model_loss_test = []
             sivol_loss_train = []
             sivol_loss_test = []
 
@@ -233,8 +236,12 @@ class Model:
             epochs_since_improvement = 0
 
             for epoch in range(num_epochs):
-                sivol_loss_train_epoch = tf.keras.metrics.Mean()
+                model_loss_train_epoch = tf.keras.metrics.Mean()
+                model_loss_test_epoch = tf.keras.metrics.Mean()
+                
+                # Model error on sivol (only used when predicting fluxes)
                 sivol_loss_test_epoch = tf.keras.metrics.Mean()
+                sivol_loss_train_epoch = tf.keras.metrics.Mean()
 
                 batch_overlap = 2 if self.predict_flux else 0
 
@@ -269,12 +276,13 @@ class Model:
                         
 
                         # Get losses and gradients from training w.r.t predicted variable
-                        _, grads = self.grad(model, train_X_batch, train_Y_batch, loss_4d)
+                        model_loss, grads = self.grad(model, train_X_batch, train_Y_batch, loss_4d)
+                        model_loss_train_epoch.update_state(model_loss)
 
                         # Apply gradients
                         optimizer.apply_gradients(zip(grads, model.trainable_variables))
 
-                        # Get loss w.r.t sivol if predicting fluxes else append previously calculated loss
+                        # Convert preds to sivol
                         if self.predict_flux:
                             
                             # Get predictions and convert from fluxes to sivol (and revert normalization)
@@ -284,21 +292,16 @@ class Model:
                             train_sivol_pred = np.empty((y_pred_train.shape[:-1]))
                             for sample_i, sample in enumerate(y_pred_train):
                                 train_sivol_pred[sample_i] = self.flux_to_sivol(sample, sivol_init=train_sivol[sample_i, :2], revert_norm=True, remove_init=False)
-
-                            # Update loss
-                            sivol_loss_train_epoch.update_state(loss_3d(train_sivol, train_sivol_pred))
-                            # sivol_loss_train_epoch.update_state(_)
+                            
                         else:
-                            self.model = model
-                            self.train_X_batch = train_X_batch
-                            self.train_sivol = train_sivol
                             
                             # Get predictions and revert normalization
                             y_pred_train = model(train_X_batch, training=True)
                             y_pred_train = y_pred_train[..., 0]
                             train_sivol_pred = self.revert_norm(y_pred_train, 'sivol')
                             
-                            sivol_loss_train_epoch.update_state(loss_3d(train_sivol, train_sivol_pred))
+                        # Update loss
+                        sivol_loss_train_epoch.update_state(loss_3d(train_sivol, train_sivol_pred))
 
                         print(f'Batch {batch_i}', end='\r')
                         batch_i += 1
@@ -334,8 +337,9 @@ class Model:
                             #     test_sivol = test_sivol[2:]
 
                             model_loss = self.get_loss_value(model, test_X_batch, test_Y_batch, loss_4d)
+                            model_loss_test_epoch.update_state(model_loss)
                             
-                            # Get losses w.r.t sivol
+                            # Convert preds to sivol
                             if self.predict_flux:
                                 # Get predictions and convert from fluxes to sivol (and revert normalization)
                                 y_pred_test = model(test_X_batch, training=True)
@@ -345,54 +349,56 @@ class Model:
                                 for sample_i, sample in enumerate(y_pred_test):
                                     test_sivol_pred[sample_i] = self.flux_to_sivol(sample, sivol_init=test_sivol[sample_i, :2], revert_norm=True, remove_init=False)
 
-                                # Update loss
-                                sivol_loss_test_epoch.update_state(loss_3d(test_sivol, test_sivol_pred))
-                                # sivol_loss_test_epoch.update_state(model_loss)
                             else:
                                 # Get predictions and revert normalization
                                 y_pred_test = model(test_X_batch, training=True)
                                 y_pred_test = y_pred_test[..., 0]
                                 test_sivol_pred = self.revert_norm(y_pred_test, 'sivol')
                                 
-                                # Update loss
-                                sivol_loss_test_epoch.update_state(loss_3d(test_sivol, test_sivol_pred))
+                            # Update loss
+                            sivol_loss_test_epoch.update_state(loss_3d(test_sivol, test_sivol_pred))
 
                     except StopIteration:
                         pass
 
-                    if save_example_maps is not None:
-                        if self.save_path is None:
-                            raise ValueError('If saving example images, must pass save_path to constructor!')
-                        ex_preds = model.predict(test_X_batch)
-                        true = test_Y_batch
+                    # if save_example_maps is not None:
+                    #     if self.save_path is None:
+                    #         raise ValueError('If saving example images, must pass save_path to constructor!')
+                    #     ex_preds = model.predict(test_X_batch)
+                    #     true = test_Y_batch
 
-                        fig, axs = plt.subplots(1, 2, figsize=(8, 4))
-                        im1 = axs[0].imshow(np.ma.masked_where(~landmask, ex_preds[save_example_maps, 0, :, :, 0]), vmin=0, vmax=1)
-                        im2 = axs[1].imshow(np.ma.masked_where(~landmask, true[save_example_maps, 0, :, :, 0]), vmin=0, vmax=1)
+                    #     fig, axs = plt.subplots(1, 2, figsize=(8, 4))
+                    #     im1 = axs[0].imshow(np.ma.masked_where(~landmask, ex_preds[save_example_maps, 0, :, :, 0]), vmin=0, vmax=1)
+                    #     im2 = axs[1].imshow(np.ma.masked_where(~landmask, true[save_example_maps, 0, :, :, 0]), vmin=0, vmax=1)
 
-                        ex_preds_dir = os.path.join(self.save_path, 'predictions_by_epoch')
-                        ex_preds_path = os.path.join(ex_preds_dir, f'e_{epoch}_ts_{save_example_maps}.png' if self.suffix is None else f'e_{epoch}_ts_{save_example_maps}_{self.suffix}.png')
+                    #     ex_preds_dir = os.path.join(self.save_path, 'predictions_by_epoch')
+                    #     ex_preds_path = os.path.join(ex_preds_dir, f'e_{epoch}_ts_{save_example_maps}.png' if self.suffix is None else f'e_{epoch}_ts_{save_example_maps}_{self.suffix}.png')
 
-                        if not os.path.exists(ex_preds_dir):
-                            os.mkdir(ex_preds_dir)
+                    #     if not os.path.exists(ex_preds_dir):
+                    #         os.mkdir(ex_preds_dir)
 
-                        plt.savefig(ex_preds_path)
-                        plt.close()
+                    #     plt.savefig(ex_preds_path)
+                    #     plt.close()
 
+                    model_loss_train_epoch = model_loss_train_epoch.result().numpy()
+                    model_loss_test_epoch = model_loss_test_epoch.result().numpy()
                     sivol_loss_train_epoch = sivol_loss_train_epoch.result().numpy()
                     sivol_loss_test_epoch = sivol_loss_test_epoch.result().numpy()
                     
-                    if np.isnan(sivol_loss_train_epoch) or np.isnan(sivol_loss_test_epoch):
+                    if np.isnan(model_loss_train_epoch) or np.isnan(model_loss_test_epoch):
                         raise ValueError('Encountered NaN loss.')
 
-                    print(f'Epoch: {epoch} -- train_loss: {sivol_loss_train_epoch} -- test_loss: {sivol_loss_test_epoch}')
+                    print(f'Epoch: {epoch} \t || train_loss (model): {model_loss_train_epoch:.5f} -- test_loss (model): {model_loss_test_epoch:.5f}' + \
+                          f' || train_loss (sivol): {sivol_loss_train_epoch:.5f} -- test_loss (sivol): {sivol_loss_test_epoch:.5f}')
 
+                    model_loss_train.append(model_loss_train_epoch)
+                    model_loss_test.append(model_loss_test_epoch)
                     sivol_loss_train.append(sivol_loss_train_epoch)
                     sivol_loss_test.append(sivol_loss_test_epoch)
 
                     # Early stopping criteria (TODO: make into its own class)
-                    if sivol_loss_test_epoch < curr_best:
-                        curr_best = sivol_loss_test_epoch
+                    if model_loss_test_epoch < curr_best:
+                        curr_best = model_loss_test_epoch
                         epochs_since_improvement = 0
                     else:
                         epochs_since_improvement += 1
@@ -404,9 +410,11 @@ class Model:
             # Get loss curve
             loss_curve = pd.DataFrame(
                 {
-                    "iteration": [i] * len(sivol_loss_test),
-                    "test_loss": sivol_loss_test,
-                    "train_loss": sivol_loss_train,
+                    "iteration": [i] * len(model_loss_test),
+                    "model_test_loss": model_loss_test,
+                    "model_train_loss": model_loss_train,
+                    "sivol_test_loss": sivol_loss_test,
+                    "sivol_train_loss": sivol_loss_train,
                 }
             )
             
@@ -514,21 +522,30 @@ class Model:
         return preds, model, loss_curves
         
         
-def read_and_combine_glorys_era5(era5_path, glorys_path, start_year=1993, end_year=2020, lat_range=(None, None), lon_range=(None, None), coarsen=1):
+def read_and_combine_glorys_era5(era5, glorys, start_year=1993, end_year=2020, lat_range=(None, None), lon_range=(None, None), coarsen=1):
+    logging.debug('Reading datasets')
     # Read data -----------------------
-    era5 = xr.open_zarr(era5_path)
-    glorys = xr.open_zarr(glorys_path)
+    era5 = xr.open_zarr(era5) if isinstance(era5, str) else era5
+
+    glorys1 = xr.open_dataset('/home/zgoussea/scratch/glorys12/glorys12_v2.zarr').isel(time=slice(1, None))
+    glorys2 = xr.open_dataset('/home/zgoussea/scratch/glorys12/glorys12_v2_fluxes.zarr')
 
     # Slice to spatial region of interest
-    glorys = glorys.sel(latitude=slice(51, 70), longitude=slice(-95, -65))
-    glorys = glorys.sel(latitude=slice(*lat_range), longitude=slice(*lon_range))
+    glorys1 = glorys1.sel(latitude=slice(*lat_range), longitude=slice(*lon_range))
+    glorys2 = glorys2.sel(latitude=slice(*lat_range), longitude=slice(*lon_range))
 
     # Only read years requested
     s, e = datetime.datetime(start_year, 1, 1), datetime.datetime(end_year, 1, 1)
     era5 = era5.sel(time=slice(s, e))
-    glorys = glorys.sel(time=slice(s, e))
+    glorys1 = glorys1.sel(time=slice(s, e))
+    glorys2 = glorys2.sel(time=slice(s, e))
 
     logging.debug('Read and sliced.')
+
+    # glorys = xr.merge([glorys1, glorys2])
+    glorys = xr.combine_by_coords([glorys1, glorys2], coords=['latitude', 'longitude', 'time'], join="exact")
+
+    logging.debug('Combined GLORYS datasets')
 
     # Interpolate ERA5 to match GLORYS
     era5 = era5.interp(latitude=glorys['latitude'], longitude=glorys['longitude'])
@@ -541,11 +558,11 @@ def read_and_combine_glorys_era5(era5_path, glorys_path, start_year=1993, end_ye
     # Get volume
     glorys['sivol'] = glorys.siconc * glorys.sithick
 
+    logging.debug('Calculated sea ice volume.')
+
     ds = xr.combine_by_coords([era5, glorys], coords=['latitude', 'longitude', 'time'], join="inner")
 
     if coarsen > 1:
         ds = ds.coarsen({'latitude': coarsen, 'longitude': coarsen}, boundary='trim').mean()
         
     return ds
-
-

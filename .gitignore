@@ -6,6 +6,7 @@ glorys12/motu.sh/
 glorys12/pydap*
 scratch.py
 cache/*
+**/*.npy
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

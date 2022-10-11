@@ -273,3 +273,13 @@ def spatial_feature_pyramid_net_hiddenstate_ND(**kwargs):
     out = x
 
     return tf.keras.Model(inputs=inputs, outputs=out)
+
+
+if __name__ == '__main__':
+    model = spatial_feature_pyramid_net_hiddenstate_ND(
+    input_shape=(3, 77, 121, 8),
+    output_steps=4,
+    num_output_vars=1,
+    )
+
+    print(model.count_params())

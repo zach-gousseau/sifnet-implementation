@@ -1,13 +1,25 @@
-for i in 5 # {1..12}
+for i in {1..12}
 do
   OUTPUT="/home/zgoussea/scratch/logs/output_direct_$i.out"
   echo $OUTPUT
   sh submit.sh $OUTPUT $i 0 "direct" | sbatch
 done
 
-for i in 5 # {1..12}
+for i in {1..12}
 do
   OUTPUT="/home/zgoussea/scratch/logs/output_fluxes_$i.out"
   echo $OUTPUT
   sh submit.sh $OUTPUT $i 1 "fluxes" | sbatch
 done
+
+: '
+for i in {1..12}
+do
+  tail -1 /home/zgoussea/scratch/logs/output_fluxes_$i.out
+done
+
+for i in {1..12}
+do
+  tail -1 /home/zgoussea/scratch/logs/output_direct_$i.out
+done
+'
