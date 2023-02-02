@@ -1,0 +1,17 @@
+ConfigParser==5.3.0
+dask==2022.2.0
+HTMLParser==0.0.2
+matplotlib==3.4.2+computecanada
+numpy==1.21.4+computecanada
+packaging==21.3+computecanada
+pandas==1.3.5+computecanada
+pydap==3.2.2+computecanada
+python_dateutil==2.8.2
+rioxarray==0.8.0+computecanada
+scikit_learn==1.2.1
+scipy==1.7.3+computecanada
+seaborn==0.12.2
+setuptools==46.1.3
+tensorflow==2.7.0+computecanada
+tqdm==4.64.1+computecanada
+xarray==0.20.2

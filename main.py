@@ -19,7 +19,7 @@ if __name__ == "__main__":
     
     ds = read_and_combine_glorys_era5(
         era5='/home/zgoussea/scratch/era5_hb_daily.zarr',
-        glorys='/home/zgoussea/scratch/glorys12/glorys12_v2.zarr',
+        glorys='/home/zgoussea/scratch/glorys12/glorys12_v2_fluxes_siconc_v2.zarr', # Or glorys12_v2_fluxes_v2.zarr if using SIV instead of SIC
         start_year=1993,
         end_year=2006,
         lat_range=(51, 70),  # Hudson Bay
@@ -29,11 +29,11 @@ if __name__ == "__main__":
 
     # ds = read_and_combine_glorys_era5(
     #     era5='/home/zgoussea/scratch/era5_nwt_daily.zarr',
-    #     glorys='/home/zgoussea/scratch/glorys12/glorys12_v2.zarr',
+    #     glorys='/home/zgoussea/scratch/glorys12/glorys12_v2_with_fluxes.zarr',
     #     start_year=1993,
     #     end_year=2006,
-    #     lat_range=(68, 77),
-    #     lon_range=(-140, -110),
+    #     lat_range=(68, 77),  # Northwest Territories
+    #     lon_range=(-140, -110),    # Northwest Territories
     #     coarsen=4,
     # )
 
@@ -77,7 +77,7 @@ if __name__ == "__main__":
             suffix=suffix
             )
 
-        # Use multiple GPUs
+        # Uncomment to use multiple GPUs (unsure if functional)
         # mirrored_strategy = tf.distribute.MultiWorkerMirroredStrategy()
         # with mirrored_strategy.scope():
 
@@ -92,4 +92,5 @@ if __name__ == "__main__":
 
         logging.info(f'Finished month {month} in {round((time.time() - start) / 60, 1)} minutes.')
 
+        # Example: 
         # python -i main.py --month 0 --predict-fluxes 0 --suffix test

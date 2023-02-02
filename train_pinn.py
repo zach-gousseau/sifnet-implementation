@@ -584,7 +584,7 @@ def read_and_combine_glorys_era5(era5, glorys, start_year=1993, end_year=2020, l
     logging.debug('Reading datasets')
     # Read data -----------------------
     era5 = xr.open_zarr(era5) if isinstance(era5, str) else era5
-    glorys = xr.open_zarr(glorys) if isinstance(glorys, str) else glorys  # Use this one -> '/home/zgoussea/projects/def-ka3scott/zgoussea/glorys12_v2_with_fluxes.zarr'
+    glorys = xr.open_zarr(glorys) if isinstance(glorys, str) else glorys  # Use this one -> '/home/zgoussea/scratch/glorys12/glorys12_v2_with_fluxes.zarr'
 
     # Slice to spatial region of interest
     glorys = glorys.sel(latitude=slice(*lat_range), longitude=slice(*lon_range))
