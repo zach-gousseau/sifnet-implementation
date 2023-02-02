@@ -92,16 +92,34 @@ def divergence(U, V, Vol, Gx, Gy):
     )
     return np.pad(div, ((0, 0), (1,1),(1,1)), 'constant', constant_values=np.nan)
 
-def intensification(Vol, nsecs):
-    inn = (Vol[2:, :, :] - Vol[:-2, :, :]) / (2 * nsecs)
-    return np.pad(inn, ((1, 1), (0,0),(0,0)), 'constant', constant_values=np.nan)
+def intensification(Vol, nsecs, difference='forward'):
+    if difference == 'forward':
+        inn = (Vol[1:, :, :] - Vol[:-1, :, :]) / (1 * nsecs)
+        inn = np.pad(inn, ((0, 1), (0,0),(0,0)), 'constant', constant_values=np.nan)
+    elif difference == 'central':
+        inn = (Vol[2:, :, :] - Vol[:-2, :, :]) / (2 * nsecs)
+        inn = np.pad(inn, ((1, 1), (0,0),(0,0)), 'constant', constant_values=np.nan)
+    else:
+        raise ValueError()
+    return inn
 
-def revert_intensification(inn, initial_vol, nsecs):
-    return invert_lagged_cumsum(inn * (2 * nsecs), initial_vol)
+def revert_intensification(inn, initial_vol, nsecs, difference='forward'):
+    if difference == 'forward':
+        assert len(initial_vol) == 1
+        arr = inn[:-1]
+        arr = arr * (1 * nsecs)
+        arr = np.append(initial_vol, arr, axis=0)
+        arr = np.cumsum(arr, axis=0) 
+    elif difference == 'central':
+        assert len(initial_vol) == 2
+        arr = inn[1:-1]
+        arr = invert_lagged_cumsum(arr * (2 * nsecs), initial_vol)
+    else:
+        raise ValueError()
+    return arr
 
-def calculate_all(ds, landmask, suffix=''):
+def calculate_all(ds, landmask, suffix='', use_vol=True):
     siconc = np.nan_to_num(ds.siconc.values)
-    sithick = np.nan_to_num(ds.sithick.values)
     vsi = np.nan_to_num(ds.vsi.values)
     usi = np.nan_to_num(ds.usi.values)
     
@@ -109,18 +127,22 @@ def calculate_all(ds, landmask, suffix=''):
     landmask = np.broadcast_to(landmask, siconc.shape)
     
     siconc[~landmask] = np.nan
-    sithick[~landmask] = np.nan
     vsi[~landmask] = np.nan
     usi [~landmask] = np.nan
 
-    vol = siconc * sithick
+    if use_vol:
+        sithick = np.nan_to_num(ds.sithick.values)
+        sithick[~landmask] = np.nan
+        arr = siconc * sithick
+    else:
+        arr = siconc
 
     gx = ds.distx.values
     gy = ds.disty.values
 
-    adv = advection(usi, vsi, vol, gx, gy)  # Advection
-    div = divergence(usi, vsi, vol, gx, gy)  # Divergence
-    inn = intensification(vol, 86400)  # Intensification
+    adv = advection(usi, vsi, arr, gx, gy)  # Advection
+    div = divergence(usi, vsi, arr, gx, gy)  # Divergence
+    inn = intensification(arr, 86400)  # Intensification
 
     res = inn - adv - div  # Residual
 

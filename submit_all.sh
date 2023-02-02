@@ -13,13 +13,6 @@ do
 done
 
 : '
-for i in {1..12}
-do
-  tail -1 /home/zgoussea/scratch/logs/output_fluxes_$i.out
-done
-
-for i in {1..12}
-do
-  tail -1 /home/zgoussea/scratch/logs/output_direct_$i.out
-done
+for i in {1..12}; do tail -1 /home/zgoussea/scratch/logs/output_fluxes_$i.out; done
+for i in {1..12}; do tail -1 /home/zgoussea/scratch/logs/output_direct_$i.out; done
 '

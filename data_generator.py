@@ -10,10 +10,11 @@ BINARY_THRESH = 0.15
 
 
 class DataGen:
-    def __init__(self):
+    def __init__(self, ice_var='sivol'):
         self.scaler = StandardScaler()
         self.X_vars = None
         self.Y_vars = None
+        self.ice_var = ice_var
 
     def create_landmask_from_nans(self, ds, var_='zos'):
         self.landmask = np.logical_not(np.isnan(ds[var_].isel(time=0)))
@@ -290,11 +291,11 @@ class DataGen:
             # the most intuitive way of doing this.
 
             logging.debug(f'Variable order: {list(ds_valid.data_vars)}')
-            sivol_index = list(ds_valid.data_vars).index("sivol")
+            ice_index = list(ds_valid.data_vars).index(self.ice_var)
             
-            # Convert to numpy & replace NaNs with 0s (ensure sivol NaNs are land and not 0s)
+            # Convert to numpy & replace NaNs with 0s (ensure ice NaNs are land and not 0s)
             valid_array = np.array(ds_valid.to_array())
-            valid_array[sivol_index][np.isnan(valid_array[sivol_index])] = (0 - self.u.sivol) / self.std.sivol
+            valid_array[ice_index][np.isnan(valid_array[ice_index])] = (0 - self.u[self.ice_var]) / self.std[self.ice_var]
             valid_array = np.nan_to_num(valid_array)
 
             valid_X, valid_Y = self.split_xy(
@@ -318,11 +319,11 @@ class DataGen:
             if not valid_only:
                 # Convert to numpy & replace NaNs with 0s
                 train_array = np.array(ds_train.to_array())
-                train_array[sivol_index][np.isnan(train_array[sivol_index])] = (0 - self.u.sivol) / self.std.sivol
+                train_array[ice_index][np.isnan(train_array[ice_index])] = (0 - self.u[self.ice_var]) / self.std[self.ice_var]
                 train_array = np.nan_to_num(train_array)
                 
                 test_array = np.array(ds_test.to_array())
-                test_array[sivol_index][np.isnan(test_array[sivol_index])] = (0 - self.u.sivol) / self.std.sivol
+                test_array[ice_index][np.isnan(test_array[ice_index])] = (0 - self.u[self.ice_var]) / self.std[self.ice_var]
                 test_array = np.nan_to_num(test_array)
 
                 train_X, train_Y = self.split_xy(
