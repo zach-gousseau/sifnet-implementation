@@ -44,7 +44,7 @@ if __name__ == "__main__":
         end_year=end_year,
         lat_range=lat_range,  # Hudson Bay
         lon_range=lon_range,  # Hudson Bay
-        coarsen=4,
+        coarsen=1,
     )
 
     # ds = read_and_combine_glorys_era5(

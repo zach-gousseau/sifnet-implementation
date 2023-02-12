@@ -1,8 +1,6 @@
 import packaging
 import xarray as xr
 import os
-from pydap.client import open_url
-from pydap.cas.get_cookies import setup_session
 import rioxarray
 import datetime
 import numpy as np
@@ -236,12 +234,16 @@ class Model:
 
         self.X_vars = X_vars
         
+        logging.info(f'Getting data')
+
         ds = self.data_gen.get_data(
             ds=ds,
             add_add=True,
             X_vars=self.X_vars,
             Y_vars=self.Y_vars + [self.ice_var] if self.predict_flux else self.Y_vars
             )
+
+        logging.info(f'Got data')
 
         # Get landmask from ZOS -- this is arbitrary and should be changed. 
         self.data_gen.create_landmask_from_nans(ds, var_='zos')
@@ -609,10 +611,14 @@ def read_and_combine_glorys_era5(era5, glorys, start_year=1993, end_year=2020, l
         glorys['sivol'] = glorys.siconc * glorys.sithick
         logging.debug('Calculated sea ice volume.')
 
+    logging.debug('Merging GLORYS and ERA5...')
     ds = xr.combine_by_coords([era5, glorys], coords=['latitude', 'longitude', 'time'], join="inner")
+    logging.debug('Merged GLORYS and ERA5.')
 
     # Resample the dataset by desired amount
     if coarsen > 1:
+        logging.debug('Resampling...')
         ds = ds.coarsen({'latitude': coarsen, 'longitude': coarsen}, boundary='trim').mean()
+        logging.debug('Resampled.')
         
     return ds
