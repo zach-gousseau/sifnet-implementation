@@ -16,15 +16,35 @@ if __name__ == "__main__":
     )
 
     start = time.time()
+
+    lat_range = (51, 70)
+    lon_range = (-95, -65)
+
+    start_year = 1993
+    end_year = 2006
+
+    glorys1 = xr.open_dataset('/home/zgoussea/scratch/glorys12/glorys12_v2.zarr').isel(time=slice(1, None))
+    glorys2 = xr.open_dataset('/home/zgoussea/scratch/glorys12/glorys12_v2_fluxes_siconc_v2.zarr')
+
+    # Slice to spatial region of interest
+    glorys1 = glorys1.sel(latitude=slice(*lat_range), longitude=slice(*lon_range))
+    glorys2 = glorys2.sel(latitude=slice(*lat_range), longitude=slice(*lon_range))
+
+    # Only read years requested
+    s, e = datetime.datetime(start_year, 1, 1), datetime.datetime(end_year, 1, 1)
+    glorys1 = glorys1.sel(time=slice(s, e))
+    glorys2 = glorys2.sel(time=slice(s, e))
+
+    glorys = xr.combine_by_coords([glorys1, glorys2], coords=['latitude', 'longitude', 'time'], join="exact")
     
     ds = read_and_combine_glorys_era5(
         era5='/home/zgoussea/scratch/era5_hb_daily.zarr',
-        glorys='/home/zgoussea/scratch/glorys12/glorys12_v2_fluxes_siconc_v2.zarr', # Or glorys12_v2_fluxes_v2.zarr if using SIV instead of SIC
-        start_year=1993,
-        end_year=2006,
-        lat_range=(51, 70),  # Hudson Bay
-        lon_range=(-95, -65),  # Hudson Bay
-        coarsen=4,
+        glorys=glorys,#'/home/zgoussea/scratch/glorys12/glorys12_v2_fluxes_siconc_v2.zarr', # Or glorys12_v2_fluxes_v2.zarr if using SIV instead of SIC
+        start_year=start_year,
+        end_year=end_year,
+        lat_range=lat_range,  # Hudson Bay
+        lon_range=lon_range,  # Hudson Bay
+        coarsen=1,
     )
 
     # ds = read_and_combine_glorys_era5(
