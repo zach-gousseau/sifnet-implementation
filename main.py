@@ -55,7 +55,7 @@ if __name__ == "__main__":
 
     # Directory ---------------------
 
-    save_path = "/home/zgoussea/scratch/sifnet_results/compare_10years_30days_forward_diff_siconc"
+    save_path = "/home/aadriano/scratch/sifnet_results/sifnet_run_test"
     # save_path = None
 
     if save_path is not None:
