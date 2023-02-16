@@ -148,27 +148,51 @@ class DataGen:
         else:
             return (center_month - 1, center_month, center_month + 1)
 
+    @staticmethod
+    def index_by_months(ds, months):
+        ds_grouped = ds.groupby('time.month').groups
+        time_idx = [ds_grouped[month] for month in months]
+        time_idx = [item for sublist in time_idx for item in sublist]
+        return ds.isel(time=time_idx)
+
     def data_split(self, ds, num_training_years=3, month=1):
+
+        logging.debug('Splitting data')
 
         # Get +-1 months
         months = self.get_3_month_window(month)
 
         # Get all data for months +-1 the desired month
-        ds_month = ds.where(ds.month.isin(months), drop=True)
+        logging.debug('Retrieving relevant months from the dataset')
+        ds = self.index_by_months(ds, months)  # ds.where(ds.month.isin(months), drop=True)
+        logging.debug('Retrieved relevant months from the dataset')
 
         # Add year designator
         # Done in a silly way by finding the large breaks in the time dimension (i.e. when going from one year to the next) and
-        # using a cumsum to add up all those breaks
+        # using a cumsum to add up all those breaks TODO: do this in a less silly way
         nominal_years_array = np.append(
             0,
             np.cumsum(
-                (ds_month.time.values[1:] - ds_month.time.values[:-1]).view(int) > (24 * 60 * 60 * 1e9)
+                (ds.time.values[1:] - ds.time.values[:-1]).view(int) > (24 * 60 * 60 * 1e9)
             ),
         )
         nominal_years_array = xr.DataArray(
-            nominal_years_array, dims=["time"], coords={"time": ds_month.time}
+            nominal_years_array, dims=["time"], coords={"time": ds.time}
         )
-        ds_month = ds_month.assign_coords({"nominal_year": nominal_years_array})
+        # ds = ds.assign_coords({"nominal_year": nominal_years_array})
+        # print(nominal_years_array)
+        ds['nominal_years'] = list(nominal_years_array)
+        # ds.isel(time=slice(0, 100)).to_zarr('test.zarr')
+        # ds = ds.set_coords('nominal_years').set_xindex('nominal_years')
+        
+        # print(ds)
+        # # ds = ds.set_coords('nominal_years').set_xindex('nominal_years')
+        # ds = ds.set_coords('nominal_years')
+        # print(ds)
+        # ds = ds.set_xindex('nominal_years')
+        # print(ds)
+
+        logging.debug('Added nominal year to dataset')
 
         # Loop over every year and yield the split
         nominal_years = sorted(np.unique(nominal_years_array))
@@ -181,14 +205,17 @@ class DataGen:
         # First N years for initial training
         training_years = nominal_years[:num_training_years]  # First N years
         test_year = nominal_years[num_training_years]  # Next year for testing
-        valid_year = nominal_years[
-            num_training_years + 1
-        ]  # Next next year for validation
+        valid_year = nominal_years[num_training_years + 1]  # Next next year for validation
 
-        ds_train = ds_month.where(ds_month.nominal_year.isin(training_years), drop=True)
-        ds_test = ds_month.where(ds_month.nominal_year == test_year, drop=True)
-        ds_valid = ds_month.where(ds_month.nominal_year == valid_year, drop=True)
+        ds_train = ds.sel(nominal_years=slice(training_years[0], training_years[-1]))
+        ds_test = ds.sel(nominal_years=test_year)
+        ds_valid = ds.sel(nominal_years=valid_year)
+
+        # ds_train = ds_month.where(ds_month.nominal_year.isin(training_years), drop=True)
+        # ds_test = ds.where(ds.nominal_year == test_year, drop=True)
+        # ds_valid = ds.where(ds.nominal_year == valid_year, drop=True)
         ds_valid = ds_valid.where(ds_valid.time.dt.month == month, drop=True)
+        logging.debug('Split dataset into train/test/val for the initial training block')
         yield ds_train, ds_test, ds_valid
 
         # Get train / test years for "fine tuning" years for next iteration
@@ -197,12 +224,13 @@ class DataGen:
             test_year = nominal_years[year + 1]  # Year 2 for testing
             valid_year = nominal_years[year + 2]  # Year 3 for validation
 
-            ds_train = ds_month.where(
-                ds_month.nominal_year.isin(training_year), drop=True
+            ds_train = ds.where(
+                ds.nominal_years.isin(training_year), drop=True
             )
-            ds_test = ds_month.where(ds_month.nominal_year == test_year, drop=True)
-            ds_valid = ds_month.where(ds_month.nominal_year == valid_year, drop=True)
+            ds_test = ds.where(ds.nominal_years == test_year, drop=True)
+            ds_valid = ds.where(ds.nominal_years == valid_year, drop=True)
             ds_valid = ds_valid.where(ds_valid.time.dt.month == month, drop=True)
+            logging.debug('Split dataset into train/test/val for annual fine-tuning')
             yield ds_train, ds_test, ds_valid
 
     def update_scaler(self, arr):
@@ -255,6 +283,11 @@ class DataGen:
         # logging.debug('Normalized the dataset')
 
         # Create expanded dataset (add timesteps)
+        # TODO: This multiplies the size of the dataset by the number of input timesteps / output timesteps. 
+        # There should be a way to do this without duplicating any data. This is what xarray is meant to do 
+        # (use pointers and lazy loading) but it doesn't look like it's actually doing that. 
+        # 
+        # It can probably done fairly easily by keeping track of time indices, and using sel()
         ds_timesteps = ds.rolling(
             time=num_timesteps_input + num_timesteps_predict
         ).construct("timesteps")
