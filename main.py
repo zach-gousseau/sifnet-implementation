@@ -20,8 +20,8 @@ if __name__ == "__main__":
     lat_range = (51, 70)
     lon_range = (-95, -65)
 
-    start_year = 1993
-    end_year = 2006
+    start_year = 2000
+    end_year = 2012
 
     glorys1 = xr.open_dataset('/home/zgoussea/scratch/glorys12/glorys12_v2.zarr').isel(time=slice(1, None))
     glorys2 = xr.open_dataset('/home/zgoussea/scratch/glorys12/glorys12_v2_fluxes_siconc_v2.zarr')
@@ -44,7 +44,8 @@ if __name__ == "__main__":
         end_year=end_year,
         lat_range=lat_range,  # Hudson Bay
         lon_range=lon_range,  # Hudson Bay
-        coarsen=1,
+        coarsen=4,
+        cache_path='/home/zgoussea/scratch/sifnet_cache/'
     )
 
     # ds = read_and_combine_glorys_era5(

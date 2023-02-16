@@ -569,7 +569,7 @@ class Model:
         return preds, model, loss_curves
         
         
-def read_and_combine_glorys_era5(era5, glorys, start_year=1993, end_year=2020, lat_range=(None, None), lon_range=(None, None), coarsen=1, ice_var='siconc'):
+def read_and_combine_glorys_era5(era5, glorys, start_year=1993, end_year=2020, lat_range=(None, None), lon_range=(None, None), coarsen=1, ice_var='siconc', cache_path=None):
     """
     Read the ERA5 and GLORYS12 datasets and combine them into a single xarray dataset. 
     :param (str or xr.Dataset) era5: Path to ERA5 dataset (or a xr.Dataset itself)
@@ -584,6 +584,15 @@ def read_and_combine_glorys_era5(era5, glorys, start_year=1993, end_year=2020, l
     :param str ice_var: Ice variable to use, either 'siconc' or 'sivol'. 
     """
     logging.debug('Reading datasets')
+
+    cache_fn = f'{start_year}_{end_year}_{lat_range}_{lon_range}_{coarsen}.zarr'
+    
+    if cache_path is not None:
+        if os.path.exists(os.path.join(cache_path, cache_fn)):
+            logging.info(f'Reading cached dataset: {os.path.join(cache_path, cache_fn)}')
+            ds = xr.open_zarr(os.path.join(cache_path, cache_fn))
+            return ds
+
     # Read data -----------------------
     era5 = xr.open_zarr(era5) if isinstance(era5, str) else era5
     glorys = xr.open_zarr(glorys) if isinstance(glorys, str) else glorys  # Use this one -> '/home/zgoussea/scratch/glorys12/glorys12_v2_with_fluxes.zarr'
@@ -618,7 +627,12 @@ def read_and_combine_glorys_era5(era5, glorys, start_year=1993, end_year=2020, l
     # Resample the dataset by desired amount
     if coarsen > 1:
         logging.debug('Resampling...')
+        ds = ds.load()
         ds = ds.coarsen({'latitude': coarsen, 'longitude': coarsen}, boundary='trim').mean()
         logging.debug('Resampled.')
+
+    if cache_path is not None:
+        ds.to_zarr(os.path.join(cache_path, cache_fn))
+        logging.info(f'Cached dataset: {os.path.join(cache_path, cache_fn)}')
         
     return ds
