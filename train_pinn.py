@@ -324,10 +324,10 @@ class Model:
                 try:
                     while True:
                         
-                        logging.info("Generating batch.")
+                        logging.debug("Generating batch.")
                         train_X_batch = next(train_X_batches)
                         train_Y_batch = next(train_Y_batches)
-                        logging.info("Generated batch.")
+                        logging.debug("Generated batch.")
 
 
                         # Remove ice from Ys if predicting on fluxes, while saving ice for loss calculation
@@ -339,7 +339,7 @@ class Model:
                             train_Y_batch = train_Y_batch[..., 1:]
                         
                         # Get losses and gradients from training w.r.t predicted variable
-                        logging.info("Training step.")
+                        logging.debug("Training step.")
                         model_loss, grads = self.grad(model, train_X_batch, train_Y_batch, loss_4d)
                         model_loss_train_epoch.update_state(model_loss)
 
