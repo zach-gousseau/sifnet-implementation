@@ -84,16 +84,16 @@ if __name__ == "__main__":
             os.makedirs(save_path)
             
     # First number referring to initial training, second for subsequent training
-    epochs = (60, 20)
+    epochs = (40, 20)
 
     # Train -------------------------
     for month in months:
         m = Model(
             month,
             predict_flux=predict_flux,
-            num_timesteps_predict=30,
+            num_timesteps_predict=6,
             num_timesteps_input=3,
-            num_training_years=10,
+            num_training_years=5,
             save_path=save_path,
             suffix=suffix
             )
@@ -108,7 +108,7 @@ if __name__ == "__main__":
             epochs=epochs,
             save_example_maps=None,
             early_stop_patience=5,
-            batch_size=8,
+            batch_size=32,
             )
 
         logging.info(f'Finished month {month} in {round((time.time() - start) / 60, 1)} minutes.')
