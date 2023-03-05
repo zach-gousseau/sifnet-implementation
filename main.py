@@ -1,3 +1,5 @@
+import netCDF4
+
 from train_pinn import *
 
 import argparse
@@ -44,7 +46,7 @@ if __name__ == "__main__":
         end_year=end_year,
         lat_range=lat_range,  # Hudson Bay
         lon_range=lon_range,  # Hudson Bay
-        coarsen=4,
+        coarsen=0,
         cache_path='/home/zgoussea/scratch/sifnet_cache/'
     )
 
@@ -76,7 +78,7 @@ if __name__ == "__main__":
 
     # Directory ---------------------
 
-    save_path = "/home/zgoussea/scratch/sifnet_results/compare_10years_30days_forward_diff_siconc"
+    save_path = "/home/zgoussea/scratch/sifnet_results/tests_5_3_30"
     # save_path = None
 
     if save_path is not None:
@@ -91,7 +93,7 @@ if __name__ == "__main__":
         m = Model(
             month,
             predict_flux=predict_flux,
-            num_timesteps_predict=6,
+            num_timesteps_predict=30,
             num_timesteps_input=3,
             num_training_years=5,
             save_path=save_path,
@@ -108,10 +110,10 @@ if __name__ == "__main__":
             epochs=epochs,
             save_example_maps=None,
             early_stop_patience=5,
-            batch_size=32,
+            batch_size=8,
             )
 
         logging.info(f'Finished month {month} in {round((time.time() - start) / 60, 1)} minutes.')
 
         # Example: 
-        # python -i main.py --month 1 --predict-fluxes 0 --suffix test
+        # python -i main.py --month 1 --predict-fluxes 1 --suffix test

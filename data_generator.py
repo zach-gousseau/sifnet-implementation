@@ -1,3 +1,5 @@
+import netCDF4
+
 import logging
 import sys
 import os
@@ -134,8 +136,8 @@ class DataGen:
         if not os.path.exists(f'cache/mean_{fn}.nc') or not os.path.exists(f'cache/std_{fn}.nc'):
             raise FileNotFoundError
             
-        u = xr.open_dataset(f'cache/mean_{fn}.nc')
-        std = xr.open_dataset(f'cache/std_{fn}.nc')
+        u = xr.open_dataset(f'cache/mean_{fn}.nc').load()
+        std = xr.open_dataset(f'cache/std_{fn}.nc').load()
         
         return u, std 
 
@@ -278,7 +280,7 @@ class DataGen:
     ):
 
         if normalize:
-            ds = self.normalize_xarray(ds, cache=False)
+            ds = self.normalize_xarray(ds, cache=True)
             
         # logging.debug('Normalized the dataset')
 
