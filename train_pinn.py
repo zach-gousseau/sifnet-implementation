@@ -193,8 +193,10 @@ class Model:
             # First ensure the sample has the correct number of channels 
             assert len(self.Y_vars) == y_pred.shape[-1]
             
+            # logging.debug('reverting norm')
             for i, Y_var in enumerate(self.Y_vars):
                 y_pred[..., i] = self.revert_norm(y_pred[..., i], Y_var)
+            # logging.debug('reverted norm')
         
         # Sum to get intensification
         inn = np.sum(y_pred, axis=-1)
@@ -207,6 +209,19 @@ class Model:
     
     def revert_norm(self, arr, Y_var):
         """TODO: This should be a function in data_gen"""
+
+        # logging.debug('start')
+        # std = self.data_gen.std[Y_var].values
+        # logging.debug('std')
+        # u = self.data_gen.u[Y_var].values
+        # logging.debug('u')
+
+        # tmp = arr * std 
+        # logging.debug('mult')
+        # tmp = tmp + u
+        # logging.debug('add')
+
+        # return tmp
         return arr * self.data_gen.std[Y_var].values + self.data_gen.u[Y_var].values
 
 
@@ -238,7 +253,7 @@ class Model:
 
         ds = self.data_gen.get_data(
             ds=ds,
-            add_add=True,
+            add_add=False,
             X_vars=self.X_vars,
             Y_vars=self.Y_vars + [self.ice_var] if self.predict_flux else self.Y_vars
             )
@@ -324,11 +339,8 @@ class Model:
                 try:
                     while True:
                         
-                        logging.info("Generating batch.")
                         train_X_batch = next(train_X_batches)
                         train_Y_batch = next(train_Y_batches)
-                        logging.info("Generated batch.")
-
 
                         # Remove ice from Ys if predicting on fluxes, while saving ice for loss calculation
                         # We want to keep ice in the loop, but not use it for training, so that we can get predictions
@@ -339,7 +351,6 @@ class Model:
                             train_Y_batch = train_Y_batch[..., 1:]
                         
                         # Get losses and gradients from training w.r.t predicted variable
-                        logging.info("Training step.")
                         model_loss, grads = self.grad(model, train_X_batch, train_Y_batch, loss_4d)
                         model_loss_train_epoch.update_state(model_loss)
 
@@ -348,13 +359,14 @@ class Model:
 
                         # Convert preds to ice
                         if self.predict_flux:
-                            
+
                             # Get predictions and convert from fluxes to ice (and revert normalization)
                             y_pred_train = model(train_X_batch, training=True)
                             y_pred_train = y_pred_train.numpy()
-                            
+
                             train_ice_pred = np.empty((y_pred_train.shape[:-1]))
                             for sample_i, sample in enumerate(y_pred_train):
+                                print(3, sample_i)
                                 train_ice_pred[sample_i] = self.flux_to_ice(sample, ice_init=train_ice[sample_i, :2], revert_norm=True, remove_init=False)
                             
                         else:
@@ -632,6 +644,9 @@ def read_and_combine_glorys_era5(era5, glorys, start_year=1993, end_year=2020, l
         logging.debug('Resampled.')
 
     if cache_path is not None:
+        ds = ds.chunk({'latitude': -1, 'longitude': -1, 'time': 32})
+        for v in ds.data_vars:
+            del ds[v].encoding['chunks']
         ds.to_zarr(os.path.join(cache_path, cache_fn))
         logging.info(f'Cached dataset: {os.path.join(cache_path, cache_fn)}')
         
